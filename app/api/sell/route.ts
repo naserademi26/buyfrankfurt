@@ -8,9 +8,12 @@ export const dynamic = "force-dynamic"
 const HELIUS_RPC_URL =
   process.env.HELIUS_RPC_URL ||
   process.env.NEXT_PUBLIC_RPC_URL ||
-  "https://mainnet.helius-rpc.com/?api-key=13b641b3-c9e5-4c63-98ae-5def3800fa0e"
+  "https://mainnet.helius-rpc.com/?api-key=785c7d18-85fe-4925-b949-50e533aec16e"
 
-const BXR_RAW_KEY = process.env.BLOXROUTE_API_KEY || process.env.NEXT_PUBLIC_BLOXROUTE_API_KEY || ""
+const BXR_RAW_KEY =
+  process.env.BLOXROUTE_API_KEY ||
+  process.env.NEXT_PUBLIC_BLOXROUTE_API_KEY ||
+  "NTI4Y2JhNWYtM2UwMy00NmFlLTg3MjEtMDE0NzI0OTMwNmRkOmU1YThkYjkxMDFhYTI5ZjM4MWQ1YmY3ZTBhMjIyYjk0"
 const BXR_AUTH = BXR_RAW_KEY ? `Basic ${Buffer.from(`${BXR_RAW_KEY}:`).toString("base64")}` : ""
 
 const BXR_REGION = process.env.BLOXROUTE_REGION_URL || "https://ny.solana.dex.blxrbdn.com"
@@ -22,7 +25,7 @@ const JUP_API_KEY =
   process.env.JUPITER_API_KEY ||
   process.env.NEXT_PUBLIC_JUP_API_KEY ||
   process.env.NEXT_PUBLIC_JUPITER_API_KEY ||
-  ""
+  "2f280df-aa16-4c78-979c-6468f660dbfb"
 
 interface SellRequest {
   mint: string

@@ -16,7 +16,7 @@ const ENDPOINT =
   process.env.NEXT_PUBLIC_RPC_URL ||
   process.env.NEXT_PUBLIC_HELIUS_RPC_URL ||
   process.env.NEXT_PUBLIC_SOLANA_RPC ||
-  "https://mainnet.helius-rpc.com/?api-key=13b641b3-c9e5-4c63-98ae-5def3800fa0e"
+  "https://mainnet.helius-rpc.com/?api-key=785c7d18-85fe-4925-b949-50e533aec16e"
 
 function sanitizeMintInput(input: string): string {
   const s = input.trim()
@@ -176,7 +176,9 @@ export default function Home() {
 
   const playBuySuccessSound = () => {
     try {
-      const audio = new Audio("https://hebbkx1anhila5yf.public.blob.vercel-storage.com/Apple%20Pay%20sound%20effect-Y8Lva1pUiq0AXmNZMcNJvPv5OKtv5A.mp3")
+      const audio = new Audio(
+        "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/Apple%20Pay%20sound%20effect-Y8Lva1pUiq0AXmNZMcNJvPv5OKtv5A.mp3",
+      )
       audio.volume = 0.3
       audio.play().catch(console.error)
     } catch (error) {
@@ -187,27 +189,27 @@ export default function Home() {
   async function buy() {
     setLoading(true)
     setTransactionResults({ successful: [], failed: [] })
-    setLog(`🚀 Ultra-fast sniping with ${slippageBps / 100}% slippage...`)
+    setLog(`🚀 Ultra-fast sniping with ${connected.length} wallets simultaneously...`)
 
     try {
       const selectedWallets = connected.filter((w) => selected[w.pubkey] && w.hasSecret)
 
       if (selectedWallets.length === 0) {
-        setLog("Error: No wallets selected")
+        setLog("❌ Error: No wallets selected")
         return
       }
 
       const buyPromises = selectedWallets.map(async (wallet) => {
         const balance = balances[wallet.pubkey] || 0
-        const buyAmount = (balance * buyPerc) / 100 - 0.005
+        const buyAmount = (balance * buyPerc) / 100 - 0.005 // Reserve minimal SOL for fees
 
         if (buyAmount <= 0) {
-          return { wallet: wallet.pubkey, error: "Insufficient balance", amount: buyAmount }
+          return { wallet: wallet.pubkey, error: "Insufficient balance", amount: 0 }
         }
 
         try {
           const controller = new AbortController()
-          const timeoutId = setTimeout(() => controller.abort(), 8000)
+          const timeoutId = setTimeout(() => controller.abort(), 8000) // Ultra-fast 8s timeout
 
           const res = await fetch("/api/buy", {
             method: "POST",
@@ -218,8 +220,8 @@ export default function Home() {
               privateKey: wallet.sk,
               tokenMint: mint,
               amount: buyAmount,
-              slippage: Math.max(slippageBps / 100, 60),
-              priorityFee: 0.01,
+              slippage: Math.max(slippageBps / 100, 50),
+              priorityFee: 0.01, // Higher priority fee for faster execution
             }),
           })
 
@@ -236,25 +238,29 @@ export default function Home() {
         } catch (e: any) {
           return {
             wallet: wallet.pubkey,
-            error: e.name === "AbortError" ? "Timeout" : e.message,
+            error: e.name === "AbortError" ? "Timeout (8s)" : e.message,
             amount: buyAmount,
           }
         }
       })
 
-      const results = await Promise.all(buyPromises)
+      const results = await Promise.allSettled(buyPromises)
+      const processedResults = results.map((r) =>
+        r.status === "fulfilled" ? r.value : { wallet: "unknown", error: "Promise failed", amount: 0 },
+      )
 
-      const successful = results.filter((r) => r.success)
-      const failed = results.filter((r) => !r.success)
+      const successful = processedResults.filter((r) => r.success)
+      const failed = processedResults.filter((r) => !r.success)
 
       setTransactionResults({ successful, failed })
 
       const summary = {
         mint,
-        wallets: selectedWallets.length,
+        totalWallets: selectedWallets.length,
         successful: successful.length,
         failed: failed.length,
-        executionTime: `${Date.now() - Date.now()}ms`,
+        successRate: `${((successful.length / selectedWallets.length) * 100).toFixed(1)}%`,
+        totalAmount: successful.reduce((sum, r) => sum + (r.amount || 0), 0).toFixed(4),
       }
 
       setLog(JSON.stringify(summary, null, 2))
@@ -263,7 +269,7 @@ export default function Home() {
         playBuySuccessSound()
       }
     } catch (e: any) {
-      setLog(`Error: ${e?.message || String(e)}`)
+      setLog(`❌ Critical Error: ${e?.message || String(e)}`)
     } finally {
       setLoading(false)
     }
@@ -272,15 +278,20 @@ export default function Home() {
   async function sell() {
     setLoading(true)
     setTransactionResults({ successful: [], failed: [] })
-    setLog(`🚀 Ultra-fast sell execution...`)
+    setLog(`💰 Ultra-fast sell executing with ${connected.length} wallets...`)
 
     try {
       const selectedWallets = connected.filter((w) => selected[w.pubkey] && w.hasSecret)
 
+      if (selectedWallets.length === 0) {
+        setLog("❌ Error: No wallets selected")
+        return
+      }
+
       const sellPromises = selectedWallets.map(async (wallet) => {
         try {
           const controller = new AbortController()
-          const timeoutId = setTimeout(() => controller.abort(), 8000)
+          const timeoutId = setTimeout(() => controller.abort(), 8000) // Ultra-fast 8s timeout
 
           const res = await fetch("/api/sell", {
             method: "POST",
@@ -290,10 +301,9 @@ export default function Home() {
             body: JSON.stringify({
               mint,
               privateKeys: [wallet.sk],
-              limitWallets: 1,
               percentage: sellPerc,
               slippageBps,
-              priorityFee: 0.01,
+              priorityFee: 0.01, // Higher priority fee
             }),
           })
 
@@ -309,27 +319,32 @@ export default function Home() {
         } catch (e: any) {
           return {
             wallet: wallet.pubkey,
-            error: e.name === "AbortError" ? "Timeout" : e.message,
+            error: e.name === "AbortError" ? "Timeout (8s)" : e.message,
           }
         }
       })
 
-      const results = await Promise.all(sellPromises)
-      const successful = results.filter((r) => r.success)
-      const failed = results.filter((r) => !r.success)
+      const results = await Promise.allSettled(sellPromises)
+      const processedResults = results.map((r) =>
+        r.status === "fulfilled" ? r.value : { wallet: "unknown", error: "Promise failed" },
+      )
+
+      const successful = processedResults.filter((r) => r.success)
+      const failed = processedResults.filter((r) => !r.success)
 
       setTransactionResults({ successful, failed })
 
       const summary = {
         mint,
-        wallets: selectedWallets.length,
+        totalWallets: selectedWallets.length,
         successful: successful.length,
         failed: failed.length,
+        successRate: `${((successful.length / selectedWallets.length) * 100).toFixed(1)}%`,
       }
 
       setLog(JSON.stringify(summary, null, 2))
     } catch (e: any) {
-      setLog(`Error: ${e?.message || String(e)}`)
+      setLog(`❌ Critical Error: ${e?.message || String(e)}`)
     } finally {
       setLoading(false)
     }
@@ -417,11 +432,11 @@ export default function Home() {
             {connected.length === 0 ? (
               <p className="text-slate-400 text-sm">No vault wallets yet.</p>
             ) : (
-              <div className="grid md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <h3 className="text-xs font-semibold text-emerald-400 border-b border-emerald-800 pb-1">
+                  <h4 className="text-xs font-semibold text-emerald-400 border-b border-emerald-800 pb-1">
                     ✅ Successful ({transactionResults.successful.length})
-                  </h3>
+                  </h4>
                   <ul className="space-y-1 text-xs">
                     {transactionResults.successful.map((result) => {
                       const wallet = connected.find((w) => w.pubkey === result.wallet)
@@ -434,22 +449,47 @@ export default function Home() {
                               checked={!!selected[result.wallet]}
                               onChange={(e) => setSelected({ ...selected, [result.wallet]: e.target.checked })}
                             />
-                            <span className="font-mono text-emerald-300 truncate">{result.wallet.slice(0, 8)}...</span>
+                            <span className="font-mono text-emerald-300">{result.wallet.slice(0, 8)}...</span>
                           </div>
                           <div className="text-emerald-400 text-xs">
                             {bal != null && `${bal.toFixed(4)} SOL`}
-                            {result.signature && <div className="truncate">Tx: {result.signature.slice(0, 8)}...</div>}
+                            {result.signature && (
+                              <div className="text-emerald-300">✓ {result.signature.slice(0, 8)}...</div>
+                            )}
                           </div>
                         </li>
                       )
                     })}
+                    {transactionResults.successful.length === 0 &&
+                      transactionResults.failed.length === 0 &&
+                      connected.map((w) => {
+                        const bal = balances[w.pubkey]
+                        return (
+                          <li key={w.pubkey} className="flex items-center justify-between gap-2 p-1">
+                            <label className="flex items-center gap-2">
+                              <input
+                                type="checkbox"
+                                checked={!!selected[w.pubkey]}
+                                onChange={(e) => setSelected({ ...selected, [w.pubkey]: e.target.checked })}
+                              />
+                              <span className="font-mono text-xs">{w.pubkey.slice(0, 12)}...</span>
+                            </label>
+                            <div className="flex items-center gap-2 text-xs">
+                              <span className="font-mono">{bal == null ? "…" : `${bal.toFixed(4)} SOL`}</span>
+                              <span className={w.hasSecret ? "text-emerald-400" : "text-yellow-400"}>
+                                {w.hasSecret ? "🔑" : "👁"}
+                              </span>
+                            </div>
+                          </li>
+                        )
+                      })}
                   </ul>
                 </div>
 
                 <div className="space-y-2">
-                  <h3 className="text-xs font-semibold text-red-400 border-b border-red-800 pb-1">
+                  <h4 className="text-xs font-semibold text-red-400 border-b border-red-800 pb-1">
                     ❌ Failed ({transactionResults.failed.length})
-                  </h3>
+                  </h4>
                   <ul className="space-y-1 text-xs">
                     {transactionResults.failed.map((result) => {
                       const wallet = connected.find((w) => w.pubkey === result.wallet)
@@ -462,50 +502,17 @@ export default function Home() {
                               checked={!!selected[result.wallet]}
                               onChange={(e) => setSelected({ ...selected, [result.wallet]: e.target.checked })}
                             />
-                            <span className="font-mono text-red-300 truncate">{result.wallet.slice(0, 8)}...</span>
+                            <span className="font-mono text-red-300">{result.wallet.slice(0, 8)}...</span>
                           </div>
                           <div className="text-red-400 text-xs">
                             {bal != null && `${bal.toFixed(4)} SOL`}
-                            <div className="truncate">Error: {result.error}</div>
+                            <div className="text-red-300">❌ {result.error}</div>
                           </div>
                         </li>
                       )
                     })}
                   </ul>
                 </div>
-
-                {transactionResults.successful.length === 0 && transactionResults.failed.length === 0 && (
-                  <div className="md:col-span-2">
-                    <ul className="space-y-1 text-sm">
-                      {connected.map((w) => {
-                        const bal = balances[w.pubkey]
-                        return (
-                          <li
-                            key={w.pubkey}
-                            className="flex items-center justify-between gap-2 p-2 hover:bg-slate-800/50 rounded"
-                          >
-                            <label className="flex items-center gap-2">
-                              <input
-                                type="checkbox"
-                                checked={!!selected[w.pubkey]}
-                                onChange={(e) => setSelected({ ...selected, [w.pubkey]: e.target.checked })}
-                              />
-                              <span className="font-mono">{w.pubkey}</span>
-                            </label>
-                            <div className="flex items-center gap-3">
-                              <span className="font-mono tabular-nums">
-                                {bal == null ? "…" : `${bal.toFixed(4)} SOL`}
-                              </span>
-                              <span className={w.hasSecret ? "text-emerald-400" : "text-yellow-400"}>
-                                {w.hasSecret ? "secret" : "read-only"}
-                              </span>
-                            </div>
-                          </li>
-                        )
-                      })}
-                    </ul>
-                  </div>
-                )}
               </div>
             )}
           </div>
