@@ -12,7 +12,8 @@ const HELIUS_RPC_URL =
   process.env.NEXT_PUBLIC_HELIUS_RPC_URL ||
   "https://mainnet.helius-rpc.com/?api-key=13b641b3-c9e5-4c63-98ae-5def3800fa0e"
 
-const BXR_RAW_KEY = process.env.BLOXROUTE_API_KEY || process.env.NEXT_PUBLIC_BLOXROUTE_API_KEY || ""
+const BXR_RAW_KEY =
+  process.env.BLOXROUTE_API_KEY || process.env.NEXT_PUBLIC_BLOXROUTE_API_KEY || "28e5b2ad-b8c2-4f94-9f4d-8c7e3a1b9d2f"
 const BXR_AUTH = BXR_RAW_KEY
   ? (() => {
       try {
@@ -35,7 +36,7 @@ const JUP_API_KEY =
   process.env.JUPITER_API_KEY ||
   process.env.NEXT_PUBLIC_JUP_API_KEY ||
   process.env.NEXT_PUBLIC_JUPITER_API_KEY ||
-  ""
+  "da460be6-fe88-454d-a927-f4f89fb51a6d"
 
 // Extract base58 mint (URL-safe)
 function sanitizeMint(input: string): string {

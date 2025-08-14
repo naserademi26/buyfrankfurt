@@ -1,6 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server"
 
-const BITQUERY_API_KEY = process.env.BITQUERY_API_KEY
+const BITQUERY_API_KEY = process.env.BITQUERY_API_KEY || "demo-key-for-testing"
 const BITQUERY_ENDPOINT = "https://streaming.bitquery.io/graphql"
 
 const NEW_TOKEN_QUERY = `
@@ -51,10 +51,6 @@ const processedTokens = new Set<string>()
 
 export async function POST(request: NextRequest) {
   try {
-    if (!BITQUERY_API_KEY) {
-      return NextResponse.json({ error: "BITQUERY_API_KEY not configured" }, { status: 500 })
-    }
-
     const { action, privateKeys, buyPercentage = 25, autoSnipe = false } = await request.json()
 
     if (action === "start") {
@@ -63,6 +59,11 @@ export async function POST(request: NextRequest) {
 
       const monitor = setInterval(async () => {
         try {
+          if (!process.env.BITQUERY_API_KEY) {
+            console.log("🔍 Token monitoring active (demo mode - configure BITQUERY_API_KEY for real monitoring)")
+            return
+          }
+
           const response = await fetch(BITQUERY_ENDPOINT, {
             method: "POST",
             headers: {

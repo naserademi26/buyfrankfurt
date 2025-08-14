@@ -13,8 +13,8 @@ const HELIUS_RPC_URL =
 const BXR_REGION = process.env.BLOXROUTE_REGION_URL || "https://ny.solana.dex.blxrbdn.com"
 const BXR_SUBMIT = process.env.BLOXROUTE_SUBMIT_URL || "https://global.solana.dex.blxrbdn.com"
 
-const JUP_BASE = process.env.JUP_BASE || "https://api.jup.ag"
-const JUP_API_KEY = process.env.JUP_API_KEY || process.env.JUPITER_API_KEY || "e2f280df-aa16-4c78-979c-6468f660dbfb"
+const JUP_BASE = process.env.JUP_BASE || "https://quote-api.jup.ag"
+const JUP_API_KEY = process.env.JUP_API_KEY || process.env.JUPITER_API_KEY || "da460be6-fe88-454d-a927-f4f89fb51a6d"
 
 export async function GET() {
   const out: any = {}
