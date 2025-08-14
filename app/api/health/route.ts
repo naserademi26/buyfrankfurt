@@ -8,13 +8,13 @@ const HELIUS_RPC_URL =
   process.env.HELIUS_RPC_URL ||
   process.env.NEXT_PUBLIC_RPC_URL ||
   process.env.NEXT_PUBLIC_HELIUS_RPC_URL ||
-  "https://mainnet.helius-rpc.com/?api-key=785c7d18-85fe-4925-b949-50e533aec16e"
+  "https://mainnet.helius-rpc.com/?api-key=13b641b3-c9e5-4c63-98ae-5def3800fa0e"
 
 const BXR_REGION = process.env.BLOXROUTE_REGION_URL || "https://ny.solana.dex.blxrbdn.com"
 const BXR_SUBMIT = process.env.BLOXROUTE_SUBMIT_URL || "https://global.solana.dex.blxrbdn.com"
 
 const JUP_BASE = process.env.JUP_BASE || "https://api.jup.ag"
-const JUP_API_KEY = process.env.JUP_API_KEY || process.env.JUPITER_API_KEY || "2f280df-aa16-4c78-979c-6468f660dbfb"
+const JUP_API_KEY = process.env.JUP_API_KEY || process.env.JUPITER_API_KEY || "e2f280df-aa16-4c78-979c-6468f660dbfb"
 
 export async function GET() {
   const out: any = {}

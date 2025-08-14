@@ -4,13 +4,14 @@ import bs58 from "bs58"
 import { PublicKey, SystemProgram, TransactionMessage, ComputeBudgetProgram } from "@solana/web3.js"
 import { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction } from "@solana/spl-token"
 
+// Updated API configuration
 const JUPITER_API_BASE = "https://quote-api.jup.ag/v6"
-const JUPITER_API_KEY = "2f280df-aa16-4c78-979c-6468f660dbfb"
+const JUPITER_API_KEY = "da460be6-fe88-454d-a927-f4f89fb51a6d"
 
 // Premium RPC endpoints
 const RPC_ENDPOINTS = [
-  "https://mainnet.helius-rpc.com/?api-key=785c7d18-85fe-4925-b949-50e533aec16e",
-  "https://rpc.helius.xyz/?api-key=785c7d18-85fe-4925-b949-50e533aec16e",
+  "https://mainnet.helius-rpc.com/?api-key=13b641b3-c9e5-4c63-98ae-5def3800fa0e",
+  "https://rpc.helius.xyz/?api-key=13b641b3-c9e5-4c63-98ae-5def3800fa0e",
   "https://api.mainnet-beta.solana.com",
 ]
 
