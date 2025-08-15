@@ -12,40 +12,32 @@ interface TokenInfo {
   source?: "jup" | "pump" | "unknown"
 }
 
-const ENDPOINT =
-  process.env.NEXT_PUBLIC_RPC_URL ||
-  process.env.NEXT_PUBLIC_HELIUS_RPC_URL ||
-  process.env.NEXT_PUBLIC_SOLANA_RPC ||
-  "https://lb.drpc.org/solana/AoLSJPx3VEsDmDDks2UasTR-g70MeVMR8Is_IgaNGuYu"
+const RPC_ENDPOINTS = [
+  "https://lb.drpc.org/solana/AoLSJPx3VEsDmDDks2UasTR-g70MeVMR8Is_IgaNGuYu",
+  "https://solana-mainnet.core.chainstack.com/1dddd2834b79c0f3f43138bd4a45e3eb",
+  "https://api.mainnet-beta.solana.com",
+  "https://solana-api.projectserum.com",
+]
 
-function sanitizeMintInput(input: string): string {
-  const s = input.trim()
-  if (!s) return ""
-  try {
-    if (s.startsWith("http")) {
-      const url = new URL(s)
-      const mintParam = url.searchParams.get("mint")
-      if (mintParam) return sanitizeMintInput(mintParam)
-      const parts = url.pathname.split("/").filter(Boolean)
-      const coinIdx = parts.findIndex((p) => p.toLowerCase() === "coin" || p.toLowerCase() === "coins")
-      if (coinIdx >= 0 && parts[coinIdx + 1]) return sanitizeMintInput(parts[coinIdx + 1])
+const DRPC_API_TOKEN = "cc41c7e9dbbb70e05b92558fe0699ec61f30bd40198747e770d321ed9f5f61c7"
+
+function createConnectionWithAuth(endpoint: string) {
+  const config: any = { commitment: "confirmed" }
+
+  // Add authentication headers for dRPC
+  if (endpoint.includes("drpc.org")) {
+    config.httpHeaders = {
+      Authorization: `Bearer ${DRPC_API_TOKEN}`,
+      "Content-Type": "application/json",
     }
-  } catch {}
-  return s.replace(/[^1-9A-HJ-NP-Za-km-z]/g, "")
-}
+  }
 
-function getRpcProviderName(endpoint: string): string {
-  if (endpoint.includes("drpc.org")) return "dRPC"
-  if (endpoint.includes("helius")) return "Helius"
-  if (endpoint.includes("alchemy")) return "Alchemy"
-  if (endpoint.includes("chainstack")) return "Chainstack"
-  if (endpoint.includes("ankr")) return "Ankr"
-  if (endpoint.includes("mainnet-beta.solana.com")) return "Solana"
-  return "Custom"
+  return new Connection(endpoint, config)
 }
 
 export default function Home() {
-  const connection = useMemo(() => new Connection(ENDPOINT, { commitment: "confirmed" }), [])
+  const [currentRpcIndex, setCurrentRpcIndex] = useState(0)
+  const [connection, setConnection] = useState(() => createConnectionWithAuth(RPC_ENDPOINTS[0]))
   const [rpcOk, setRpcOk] = useState<boolean | null>(null)
   const [rpcLatency, setRpcLatency] = useState<number | null>(null)
 
@@ -76,26 +68,52 @@ export default function Home() {
 
   useEffect(() => {
     let mounted = true
-    ;(async () => {
+    let retryCount = 0
+
+    const checkRpcHealth = async () => {
       try {
         const startTime = Date.now()
         await connection.getLatestBlockhash("confirmed")
         const latency = Date.now() - startTime
+
         if (mounted) {
           setRpcOk(true)
           setRpcLatency(latency)
+          retryCount = 0 // Reset retry count on success
         }
-      } catch {
-        if (mounted) {
+      } catch (error: any) {
+        console.error(`[v0] RPC health check failed for ${RPC_ENDPOINTS[currentRpcIndex]}:`, error)
+
+        if (mounted && retryCount < RPC_ENDPOINTS.length - 1) {
+          // Try next RPC endpoint
+          retryCount++
+          const nextIndex = (currentRpcIndex + 1) % RPC_ENDPOINTS.length
+          console.log(`[v0] Switching to RPC endpoint ${nextIndex}: ${RPC_ENDPOINTS[nextIndex]}`)
+
+          setCurrentRpcIndex(nextIndex)
+          setConnection(createConnectionWithAuth(RPC_ENDPOINTS[nextIndex]))
+
+          // Retry with new endpoint after short delay
+          setTimeout(() => {
+            if (mounted) checkRpcHealth()
+          }, 1000)
+        } else if (mounted) {
           setRpcOk(false)
           setRpcLatency(null)
         }
       }
-    })()
+    }
+
+    checkRpcHealth()
+
+    // Check RPC health every 30 seconds
+    const interval = setInterval(checkRpcHealth, 30000)
+
     return () => {
       mounted = false
+      clearInterval(interval)
     }
-  }, [connection])
+  }, [connection, currentRpcIndex])
 
   async function addVault() {
     const lines = vaultKeys
@@ -396,7 +414,7 @@ export default function Home() {
             {rpcOk == null
               ? "Checking..."
               : rpcOk
-                ? `Connected ${getRpcProviderName(ENDPOINT)}${rpcLatency ? ` (${rpcLatency}ms)` : ""}`
+                ? `Connected ${getRpcProviderName(RPC_ENDPOINTS[currentRpcIndex])}${rpcLatency ? ` (${rpcLatency}ms)` : ""}`
                 : "Disconnected"}
           </span>
         </div>
@@ -698,4 +716,28 @@ export default function Home() {
       </section>
     </div>
   )
+}
+
+function sanitizeMintInput(input: string): string {
+  const s = input.trim()
+  if (!s) return ""
+  try {
+    if (s.startsWith("http")) {
+      const url = new URL(s)
+      const mintParam = url.searchParams.get("mint")
+      if (mintParam) return sanitizeMintInput(mintParam)
+      const parts = url.pathname.split("/").filter(Boolean)
+      const coinIdx = parts.findIndex((p) => p.toLowerCase() === "coin" || p.toLowerCase() === "coins")
+      if (coinIdx >= 0 && parts[coinIdx + 1]) return sanitizeMintInput(parts[coinIdx + 1])
+    }
+  } catch {}
+  return s.replace(/[^1-9A-HJ-NP-Za-km-z]/g, "")
+}
+
+function getRpcProviderName(endpoint: string): string {
+  if (endpoint.includes("drpc.org")) return "dRPC"
+  if (endpoint.includes("chainstack")) return "Chainstack"
+  if (endpoint.includes("mainnet-beta.solana.com")) return "Solana"
+  if (endpoint.includes("projectserum")) return "Serum"
+  return "Custom"
 }
