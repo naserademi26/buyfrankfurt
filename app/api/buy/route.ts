@@ -8,7 +8,7 @@ const JUPITER_API_BASE = "https://quote-api.jup.ag/v6"
 const JUPITER_API_KEY = "2f280df-aa16-4c78-979c-6468f660dbfb"
 
 const RPC_ENDPOINTS = [
-  "https://mainnet.helius-rpc.com/?api-key=2f61447e-3692-4117-af32-97a37e847e82",
+  "https://mainnet.helius-rpc.com/?api-key=785c7d18-85fe-4925-b949-50e533aec16e",
   "https://api.mainnet-beta.solana.com",
   "https://rpc.ankr.com/solana",
 ]

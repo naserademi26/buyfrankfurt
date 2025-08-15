@@ -5,7 +5,7 @@ import bs58 from "bs58"
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
-const HELIUS_RPC_URL = "https://mainnet.helius-rpc.com/?api-key=2f61447e-3692-4117-af32-97a37e847e82"
+const HELIUS_RPC_URL = "https://mainnet.helius-rpc.com/?api-key=785c7d18-85fe-4925-b949-50e533aec16e"
 const BXR_RAW_KEY =
   process.env.BLOXROUTE_API_KEY ||
   process.env.NEXT_PUBLIC_BLOXROUTE_API_KEY ||
