@@ -10,8 +10,59 @@ const JUPITER_API_KEY = "2f280df-aa16-4c78-979c-6468f660dbfb"
 const RPC_ENDPOINTS = [
   "https://solana-mainnet.core.chainstack.com/1dddd2834b79c0f3f43138bd4a45e3eb",
   "https://api.mainnet-beta.solana.com",
-  "https://api.devnet.solana.com",
+  "https://solana-mainnet.g.alchemy.com/v2/xPZFpP1qn7EApXWTwYAdP",
+  "https://rpc.ankr.com/solana",
+  "https://solana.blockdaemon.com",
 ]
+
+async function createConnectionWithFailover(): Promise<Connection> {
+  for (const endpoint of RPC_ENDPOINTS) {
+    try {
+      const connection = new Connection(endpoint, {
+        commitment: "processed",
+        confirmTransactionInitialTimeout: 4000, // Reduced timeout
+      })
+
+      // Quick health check
+      await Promise.race([
+        connection.getSlot(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("Health check timeout")), 1000)),
+      ])
+
+      console.log(`✅ Connected to RPC: ${endpoint}`)
+      return connection
+    } catch (error: any) {
+      console.log(`⚠️ RPC ${endpoint} failed: ${error.message}`)
+      continue
+    }
+  }
+  throw new Error("All RPC endpoints failed")
+}
+
+async function executeWithRPCFailover<T>(operation: (connection: Connection) => Promise<T>): Promise<T> {
+  for (const endpoint of RPC_ENDPOINTS) {
+    try {
+      const connection = new Connection(endpoint, {
+        commitment: "processed",
+        confirmTransactionInitialTimeout: 4000,
+      })
+
+      return await operation(connection)
+    } catch (error: any) {
+      if (error.message?.includes("429") || error.code === 429) {
+        console.log(`⚠️ Rate limited on ${endpoint}, switching immediately...`)
+        continue // Immediately try next endpoint on 429
+      }
+
+      if (RPC_ENDPOINTS.indexOf(endpoint) === RPC_ENDPOINTS.length - 1) {
+        throw error // Last endpoint, throw the error
+      }
+
+      console.log(`⚠️ ${endpoint} failed: ${error.message}, trying next...`)
+    }
+  }
+  throw new Error("All RPC endpoints exhausted")
+}
 
 interface BuyRequest {
   privateKey: string
@@ -70,18 +121,12 @@ export async function POST(request: NextRequest) {
 
     console.log(`💰 Wallet: ${keypair.publicKey.toString()}`)
 
-    // Create connection
-    const connection = new Connection(RPC_ENDPOINTS[0], {
-      commitment: "processed",
-      confirmTransactionInitialTimeout: 6000, // Reduced from 30000 to 6000ms
+    const balance = await executeWithRPCFailover(async (connection) => {
+      return (await Promise.race([
+        connection.getBalance(keypair.publicKey),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("Balance check timeout")), 2000)),
+      ])) as number
     })
-
-    // Check wallet balance
-    const balancePromise = connection.getBalance(keypair.publicKey)
-    const balance = (await Promise.race([
-      balancePromise,
-      new Promise((_, reject) => setTimeout(() => reject(new Error("Balance check timeout")), 3000)),
-    ])) as number
 
     const balanceSOL = balance / LAMPORTS_PER_SOL
     console.log(`💰 Balance: ${balanceSOL} SOL`)
@@ -154,31 +199,36 @@ export async function POST(request: NextRequest) {
             const swapData = await swapResponse.json()
 
             if (swapData.swapTransaction) {
-              const swapTransactionBuf = Buffer.from(swapData.swapTransaction, "base64")
-              const transaction = VersionedTransaction.deserialize(swapTransactionBuf)
-              transaction.sign([keypair])
+              const result = await executeWithRPCFailover(async (connection) => {
+                const swapTransactionBuf = Buffer.from(swapData.swapTransaction, "base64")
+                const transaction = VersionedTransaction.deserialize(swapTransactionBuf)
+                transaction.sign([keypair])
 
-              const signature = await connection.sendRawTransaction(transaction.serialize(), {
-                skipPreflight: true,
-                preflightCommitment: "processed",
-                maxRetries: 0,
+                const signature = await connection.sendRawTransaction(transaction.serialize(), {
+                  skipPreflight: true,
+                  preflightCommitment: "processed",
+                  maxRetries: 0,
+                })
+
+                const confirmation = (await Promise.race([
+                  connection.confirmTransaction(signature, "processed"),
+                  new Promise((_, reject) => setTimeout(() => reject(new Error("Confirmation timeout")), 3000)),
+                ])) as any
+
+                if (!confirmation.value?.err) {
+                  return { signature, outputTokens }
+                }
+                throw new Error("Transaction failed")
               })
 
-              const confirmation = (await Promise.race([
-                connection.confirmTransaction(signature, "processed"),
-                new Promise((_, reject) => setTimeout(() => reject(new Error("Confirmation timeout")), 4000)),
-              ])) as any
-
-              if (!confirmation.value?.err) {
-                console.log(`🎉 JUPITER BUY SUCCESS!`)
-                return NextResponse.json({
-                  success: true,
-                  signature,
-                  outputTokens: outputTokens.toFixed(2),
-                  solscanUrl: `https://solscan.io/tx/${signature}`,
-                  message: `Successfully bought ~${outputTokens.toFixed(2)} tokens for ${amount} SOL via Jupiter`,
-                })
-              }
+              console.log(`🎉 JUPITER BUY SUCCESS!`)
+              return NextResponse.json({
+                success: true,
+                signature: result.signature,
+                outputTokens: result.outputTokens.toFixed(2),
+                solscanUrl: `https://solscan.io/tx/${result.signature}`,
+                message: `Successfully bought ~${result.outputTokens.toFixed(2)} tokens for ${amount} SOL via Jupiter`,
+              })
             }
           }
         }
@@ -189,7 +239,7 @@ export async function POST(request: NextRequest) {
 
     console.log(`⚡ Step 2: Direct Pump.fun contract interaction...`)
 
-    try {
+    const result = await executeWithRPCFailover(async (connection) => {
       const tokenMintPubkey = new PublicKey(tokenMint)
 
       // Correct PDA derivations for Pump.fun
@@ -213,10 +263,7 @@ export async function POST(request: NextRequest) {
       ])) as any
 
       if (!bondingCurveInfo) {
-        return NextResponse.json(
-          { success: false, error: "Token bonding curve not found - token may not be a valid Pump.fun token" },
-          { status: 400 },
-        )
+        throw new Error("Token bonding curve not found - token may not be a valid Pump.fun token")
       }
 
       const instructions = []
@@ -287,7 +334,7 @@ export async function POST(request: NextRequest) {
       const signature = await connection.sendRawTransaction(transaction.serialize(), {
         skipPreflight: false, // Enable preflight for better error messages
         preflightCommitment: "processed",
-        maxRetries: 1,
+        maxRetries: 0, // No retries, let RPC failover handle it
       })
 
       console.log(`📡 Transaction sent: ${signature}`)
@@ -302,57 +349,35 @@ export async function POST(request: NextRequest) {
           },
           "processed",
         ),
-        new Promise((_, reject) => setTimeout(() => reject(new Error("Transaction confirmation timeout")), 4000)),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("Transaction confirmation timeout")), 3000)),
       ])) as any
 
       if (confirmation.value?.err) {
-        console.error(`❌ Transaction failed:`, confirmation.value.err)
-        return NextResponse.json(
-          {
-            success: false,
-            error: `Transaction failed: ${JSON.stringify(confirmation.value.err)}`,
-            signature,
-          },
-          { status: 500 },
-        )
+        throw new Error(`Transaction failed: ${JSON.stringify(confirmation.value.err)}`)
       }
 
-      console.log(`🎉 DIRECT PUMP.FUN BUY SUCCESS!`)
-      return NextResponse.json({
-        success: true,
-        signature,
-        solscanUrl: `https://solscan.io/tx/${signature}`,
-        message: `Successfully bought fresh token for ${amount} SOL via direct Pump.fun contract`,
-      })
-    } catch (directError: any) {
-      console.error(`❌ Direct Pump.fun buy failed:`, directError)
+      return signature
+    })
 
-      // Provide more specific error messages
-      let errorMessage = directError.message || "Unknown error"
-      if (errorMessage.includes("insufficient funds")) {
-        errorMessage = "Insufficient SOL balance for transaction"
-      } else if (errorMessage.includes("timeout")) {
-        errorMessage = "Transaction timeout - network congestion"
-      } else if (errorMessage.includes("blockhash not found")) {
-        errorMessage = "Network congestion - try again"
-      } else if (errorMessage.includes("InvalidAccountData")) {
-        errorMessage = "Token may not be a valid Pump.fun token"
-      }
-
-      return NextResponse.json(
-        {
-          success: false,
-          error: `Direct Pump.fun transaction failed: ${errorMessage}`,
-        },
-        { status: 500 },
-      )
-    }
+    console.log(`🎉 DIRECT PUMP.FUN BUY SUCCESS!`)
+    return NextResponse.json({
+      success: true,
+      signature: result,
+      solscanUrl: `https://solscan.io/tx/${result}`,
+      message: `Successfully bought fresh token for ${amount} SOL via direct Pump.fun contract`,
+    })
   } catch (error: any) {
     console.error("❌ API Buy error:", error)
+
+    let errorMessage = error.message || "Unknown error occurred"
+    if (errorMessage.includes("429") || error.code === 429) {
+      errorMessage = "All RPC endpoints are rate limited. Please try again in a moment."
+    }
+
     return NextResponse.json(
       {
         success: false,
-        error: error.message || "Unknown error occurred",
+        error: errorMessage,
       },
       { status: 500 },
     )
