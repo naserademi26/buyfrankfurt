@@ -12,14 +12,22 @@ interface TokenInfo {
   source?: "jup" | "pump" | "unknown"
 }
 
+interface RPCStatus {
+  connected: boolean
+  provider: string
+  latency: number | null
+  endpoint: string
+}
+
 const RPC_ENDPOINTS = [
   { name: "Chainstack", url: "https://solana-mainnet.core.chainstack.com/1dddd2834b79c0f3f43138bd4a45e3eb" },
   { name: "Helius", url: "https://mainnet.helius-rpc.com/?api-key=785c7d18-85fe-4925-b949-50e533aec16e" },
-  { name: "Solana", url: "https://api.mainnet-beta.solana.com" },
+  {
+    name: "Alchemy",
+    url: "https://solana-mainnet.g.alchemy.com/v2/xPZFpP1qn7EApXWTwYAdPhttps://solana-mainnet.g.alchemy.com/v2/DmvQMkbPZW42fYymT4V3Z3Qb7PNI-kIf",
+  },
   { name: "Ankr", url: "https://rpc.ankr.com/solana" },
 ]
-
-const ENDPOINT = process.env.NEXT_PUBLIC_RPC_URL || RPC_ENDPOINTS[0].url
 
 function sanitizeMintInput(input: string): string {
   const s = input.trim()
@@ -38,24 +46,17 @@ function sanitizeMintInput(input: string): string {
 }
 
 export default function Home() {
-  const [currentRpcIndex, setCurrentRpcIndex] = useState(0)
+  const [currentRPCIndex, setCurrentRPCIndex] = useState(0)
   const connection = useMemo(
-    () =>
-      new Connection(RPC_ENDPOINTS[currentRpcIndex].url, {
-        commitment: "processed", // Faster confirmation
-        confirmTransactionInitialTimeout: 6000, // Reduced timeout for speed
-        disableRetryOnRateLimit: false,
-        httpHeaders: {
-          "Content-Type": "application/json",
-          "User-Agent": "SolanaSniper/5.0",
-        },
-      }),
-    [currentRpcIndex],
+    () => new Connection(RPC_ENDPOINTS[currentRPCIndex].url, { commitment: "confirmed" }),
+    [currentRPCIndex],
   )
-
-  const [rpcOk, setRpcOk] = useState<boolean | null>(null)
-  const [rpcLatency, setRpcLatency] = useState<number | null>(null)
-  const [currentRpcName, setCurrentRpcName] = useState<string>(RPC_ENDPOINTS[0].name)
+  const [rpcStatus, setRpcStatus] = useState<RPCStatus>({
+    connected: false,
+    provider: RPC_ENDPOINTS[0].name,
+    latency: null,
+    endpoint: RPC_ENDPOINTS[0].url,
+  })
 
   const [vaultKeys, setVaultKeys] = useState<string>("")
   const [connected, setConnected] = useState<VaultEntry[]>([])
@@ -82,42 +83,77 @@ export default function Home() {
 
   const refreshId = useRef(0)
 
+  const testRPCConnection = async (rpcIndex: number = currentRPCIndex): Promise<RPCStatus> => {
+    const rpc = RPC_ENDPOINTS[rpcIndex]
+    const testConnection = new Connection(rpc.url, { commitment: "confirmed" })
+
+    try {
+      const startTime = Date.now()
+      await testConnection.getLatestBlockhash("confirmed")
+      const latency = Date.now() - startTime
+
+      return {
+        connected: true,
+        provider: rpc.name,
+        latency,
+        endpoint: rpc.url,
+      }
+    } catch (error) {
+      return {
+        connected: false,
+        provider: rpc.name,
+        latency: null,
+        endpoint: rpc.url,
+      }
+    }
+  }
+
   useEffect(() => {
     let mounted = true
-    const testRpcConnection = async () => {
-      const startTime = Date.now()
-      const currentEndpoint = RPC_ENDPOINTS[currentRpcIndex]
-      try {
-        await connection.getLatestBlockhash("processed")
-        const latency = Date.now() - startTime
-        if (mounted) {
-          setRpcOk(true)
-          setRpcLatency(latency)
-          setCurrentRpcName(currentEndpoint.name)
-          console.log(`✅ RPC Connected (${latency}ms) - ${currentEndpoint.name}: ${currentEndpoint.url}`)
-        }
-      } catch (error) {
-        console.error(`❌ RPC Failed - ${currentEndpoint.name}:`, error)
-        if (mounted) {
-          setRpcOk(false)
-          setRpcLatency(null)
-          if (currentRpcIndex < RPC_ENDPOINTS.length - 1) {
-            console.log(`🔄 Switching to backup RPC...`)
-            setCurrentRpcIndex((prev) => prev + 1)
+    let intervalId: NodeJS.Timeout
+
+    const checkRPCHealth = async () => {
+      // Test current RPC
+      const currentStatus = await testRPCConnection(currentRPCIndex)
+
+      if (currentStatus.connected) {
+        if (mounted) setRpcStatus(currentStatus)
+      } else {
+        // Current RPC failed, try others
+        for (let i = 0; i < RPC_ENDPOINTS.length; i++) {
+          if (i === currentRPCIndex) continue
+
+          const testStatus = await testRPCConnection(i)
+          if (testStatus.connected) {
+            if (mounted) {
+              setCurrentRPCIndex(i)
+              setRpcStatus(testStatus)
+              console.log(`[v0] Switched to ${testStatus.provider} RPC due to connection issues`)
+            }
+            return
           }
+        }
+
+        // All RPCs failed
+        if (mounted) {
+          setRpcStatus({
+            connected: false,
+            provider: RPC_ENDPOINTS[currentRPCIndex].name,
+            latency: null,
+            endpoint: RPC_ENDPOINTS[currentRPCIndex].url,
+          })
         }
       }
     }
 
-    testRpcConnection()
-
-    const interval = setInterval(testRpcConnection, 30000)
+    checkRPCHealth()
+    intervalId = setInterval(checkRPCHealth, 30000) // Check every 30 seconds
 
     return () => {
       mounted = false
-      clearInterval(interval)
+      if (intervalId) clearInterval(intervalId)
     }
-  }, [connection, currentRpcIndex])
+  }, [currentRPCIndex])
 
   async function addVault() {
     const lines = vaultKeys
@@ -240,9 +276,9 @@ export default function Home() {
         return
       }
 
-      const buyPromises = selectedWallets.map(async (wallet, index) => {
+      const buyPromises = selectedWallets.map(async (wallet) => {
         const balance = balances[wallet.pubkey] || 0
-        const buyAmount = (balance * buyPerc) / 100 - 0.003
+        const buyAmount = (balance * buyPerc) / 100 - 0.005 // Reserve minimal SOL for fees
 
         if (buyAmount <= 0) {
           return { wallet: wallet.pubkey, error: "Insufficient balance", amount: 0 }
@@ -250,16 +286,11 @@ export default function Home() {
 
         try {
           const controller = new AbortController()
-          const timeoutId = setTimeout(() => controller.abort(), 3000)
-
-          const rpcIndex = index % RPC_ENDPOINTS.length
+          const timeoutId = setTimeout(() => controller.abort(), 8000) // Ultra-fast 8s timeout
 
           const res = await fetch("/api/buy", {
             method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "X-RPC-Index": rpcIndex.toString(),
-            },
+            headers: { "Content-Type": "application/json" },
             cache: "no-store",
             signal: controller.signal,
             body: JSON.stringify({
@@ -267,9 +298,7 @@ export default function Home() {
               tokenMint: mint,
               amount: buyAmount,
               slippage: Math.max(slippageBps / 100, 50),
-              priorityFee: 0.05,
-              commitment: "processed",
-              skipBalanceCheck: true,
+              priorityFee: 0.01, // Higher priority fee for faster execution
             }),
           })
 
@@ -286,7 +315,7 @@ export default function Home() {
         } catch (e: any) {
           return {
             wallet: wallet.pubkey,
-            error: e.name === "AbortError" ? "Timeout (3s)" : e.message,
+            error: e.name === "AbortError" ? "Timeout (8s)" : e.message,
             amount: buyAmount,
           }
         }
@@ -309,8 +338,6 @@ export default function Home() {
         failed: failed.length,
         successRate: `${((successful.length / selectedWallets.length) * 100).toFixed(1)}%`,
         totalAmount: successful.reduce((sum, r) => sum + (r.amount || 0), 0).toFixed(4),
-        executionTime: "3s max per wallet",
-        rpcDistribution: "Load balanced across all endpoints",
       }
 
       setLog(JSON.stringify(summary, null, 2))
@@ -338,19 +365,14 @@ export default function Home() {
         return
       }
 
-      const sellPromises = selectedWallets.map(async (wallet, index) => {
+      const sellPromises = selectedWallets.map(async (wallet) => {
         try {
           const controller = new AbortController()
-          const timeoutId = setTimeout(() => controller.abort(), 3000)
-
-          const rpcIndex = index % RPC_ENDPOINTS.length
+          const timeoutId = setTimeout(() => controller.abort(), 8000) // Ultra-fast 8s timeout
 
           const res = await fetch("/api/sell", {
             method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "X-RPC-Index": rpcIndex.toString(),
-            },
+            headers: { "Content-Type": "application/json" },
             cache: "no-store",
             signal: controller.signal,
             body: JSON.stringify({
@@ -358,9 +380,7 @@ export default function Home() {
               privateKeys: [wallet.sk],
               percentage: sellPerc,
               slippageBps,
-              priorityFee: 0.05,
-              commitment: "processed",
-              skipBalanceCheck: true,
+              priorityFee: 0.01, // Higher priority fee
             }),
           })
 
@@ -376,7 +396,7 @@ export default function Home() {
         } catch (e: any) {
           return {
             wallet: wallet.pubkey,
-            error: e.name === "AbortError" ? "Timeout (3s)" : e.message,
+            error: e.name === "AbortError" ? "Timeout (8s)" : e.message,
           }
         }
       })
@@ -397,8 +417,6 @@ export default function Home() {
         successful: successful.length,
         failed: failed.length,
         successRate: `${((successful.length / selectedWallets.length) * 100).toFixed(1)}%`,
-        executionTime: "3s max per wallet",
-        rpcDistribution: "Load balanced across all endpoints",
       }
 
       setLog(JSON.stringify(summary, null, 2))
@@ -432,17 +450,11 @@ export default function Home() {
         </div>
         <div className="rounded-xl border border-slate-800 bg-slate-900/60 px-3 py-2 text-sm">
           <span className="text-slate-400">RPC: </span>
-          <span className={rpcOk ? "text-emerald-400" : rpcOk === false ? "text-rose-400" : "text-slate-400"}>
-            {rpcOk == null ? "Checking..." : rpcOk ? "Connected" : "Disconnected"}
+          <span className={rpcStatus.connected ? "text-emerald-400" : "text-rose-400"}>
+            {rpcStatus.connected
+              ? `Connected ${rpcStatus.provider} ${rpcStatus.latency ? `(${rpcStatus.latency}ms)` : ""}`
+              : `Disconnected ${rpcStatus.provider}`}
           </span>
-          {rpcOk && (
-            <span className="text-emerald-300 ml-1">
-              {currentRpcName} ({rpcLatency}ms)
-            </span>
-          )}
-          {!rpcOk && currentRpcIndex > 0 && (
-            <span className="text-yellow-400 ml-2">(Backup #{currentRpcIndex + 1})</span>
-          )}
         </div>
       </header>
 
