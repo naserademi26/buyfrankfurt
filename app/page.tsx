@@ -13,7 +13,6 @@ interface TokenInfo {
 }
 
 const RPC_ENDPOINTS = [
-  "https://solana-mainnet.g.alchemy.com/v2/xPZFpP1qn7EApXWTwYAdP",
   "https://solana-mainnet.core.chainstack.com/1dddd2834b79c0f3f43138bd4a45e3eb",
   "https://api.mainnet-beta.solana.com",
   "https://solana-api.projectserum.com",
@@ -21,7 +20,6 @@ const RPC_ENDPOINTS = [
 
 function createConnectionWithAuth(endpoint: string) {
   const config: any = { commitment: "confirmed" }
-  // Alchemy doesn't require special authentication headers
   return new Connection(endpoint, config)
 }
 
@@ -725,8 +723,8 @@ function sanitizeMintInput(input: string): string {
 }
 
 function getRpcProviderName(endpoint: string): string {
-  if (endpoint.includes("alchemy.com")) return "Alchemy"
   if (endpoint.includes("chainstack")) return "Chainstack"
+  if (endpoint.includes("alchemy.com")) return "Alchemy"
   if (endpoint.includes("mainnet-beta.solana.com")) return "Solana"
   if (endpoint.includes("projectserum")) return "Serum"
   return "Custom"
