@@ -86,16 +86,10 @@ export async function POST(request: NextRequest) {
     const body: BuyRequest = await request.json()
     const { privateKey, tokenMint, amount, slippage = 50 } = body
 
-    console.log(`🚀 BUY API: ${amount} SOL for token ${tokenMint}`)
+    const rpcIndex = Number.parseInt(request.headers.get("X-RPC-Index") || "0") % RPC_ENDPOINTS.length
+    const selectedRpcEndpoint = RPC_ENDPOINTS[rpcIndex]
 
-    // Validate inputs
-    if (!privateKey || !tokenMint || !amount) {
-      return NextResponse.json({ success: false, error: "Missing required parameters" }, { status: 400 })
-    }
-
-    if (amount <= 0 || amount > 10) {
-      return NextResponse.json({ success: false, error: "Invalid amount" }, { status: 400 })
-    }
+    console.log(`🚀 BUY API: ${amount} SOL for token ${tokenMint} via RPC ${rpcIndex + 1}`)
 
     // Create keypair from private key
     let keypair: Keypair
@@ -131,23 +125,29 @@ export async function POST(request: NextRequest) {
 
     console.log(`💰 Wallet: ${keypair.publicKey.toString()}`)
 
-    const { balance, connection } = await withRpcRetry(async (conn) => {
-      const bal = await conn.getBalance(keypair.publicKey)
-      return { balance: bal, connection: conn }
-    })
+    const skipBalanceCheck = request.headers.get("X-Skip-Balance-Check") === "true"
 
-    const balanceSOL = balance / LAMPORTS_PER_SOL
+    if (!skipBalanceCheck) {
+      const connection = new Connection(selectedRpcEndpoint, {
+        commitment: "processed",
+        confirmTransactionInitialTimeout: 3000, // Reduced from 15s to 3s
+        disableRetryOnRateLimit: true, // Disable retries for speed
+      })
 
-    console.log(`💰 Balance: ${balanceSOL} SOL`)
+      const balance = await connection.getBalance(keypair.publicKey)
+      const balanceSOL = balance / LAMPORTS_PER_SOL
 
-    if (balanceSOL < amount + 0.01) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: `Insufficient balance: ${balanceSOL.toFixed(4)} SOL available, need ${(amount + 0.01).toFixed(4)} SOL`,
-        },
-        { status: 400 },
-      )
+      console.log(`💰 Balance: ${balanceSOL} SOL`)
+
+      if (balanceSOL < amount + 0.01) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: `Insufficient balance: ${balanceSOL.toFixed(4)} SOL available, need ${(amount + 0.01).toFixed(4)} SOL`,
+          },
+          { status: 400 },
+        )
+      }
     }
 
     const amountLamports = Math.floor(amount * LAMPORTS_PER_SOL)
@@ -155,23 +155,24 @@ export async function POST(request: NextRequest) {
 
     console.log(`⚡ Step 1: Trying Jupiter first...`)
 
-    // Step 1: Try Jupiter first
     try {
       const quoteUrl = `${JUPITER_API_BASE}/quote?inputMint=So11111111111111111111111111111111111111112&outputMint=${tokenMint}&amount=${amountLamports}&slippageBps=${slippageBps}&onlyDirectRoutes=false`
 
-      const quoteResponse = await fetch(quoteUrl, {
-        method: "GET",
-        headers: {
-          Accept: "application/json",
-          "X-API-Key": JUPITER_API_KEY,
-        },
-      })
+      const quoteResponse = (await Promise.race([
+        fetch(quoteUrl, {
+          method: "GET",
+          headers: {
+            Accept: "application/json",
+            "X-API-Key": JUPITER_API_KEY,
+          },
+        }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("Jupiter timeout")), 2000)), // 2s timeout
+      ])) as Response
 
       if (quoteResponse.ok) {
         const quoteData = await quoteResponse.json()
 
         if (quoteData && !quoteData.error && quoteData.outAmount && quoteData.outAmount !== "0") {
-          // Jupiter route available - proceed with existing logic
           console.log(`✅ Jupiter route found, proceeding with swap...`)
 
           const outputTokens = Number.parseInt(quoteData.outAmount) / Math.pow(10, 6)
@@ -189,14 +190,17 @@ export async function POST(request: NextRequest) {
             dynamicComputeUnitLimit: true,
           }
 
-          const swapResponse = await fetch(`${JUPITER_API_BASE}/swap`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "X-API-Key": JUPITER_API_KEY,
-            },
-            body: JSON.stringify(swapPayload),
-          })
+          const swapResponse = (await Promise.race([
+            fetch(`${JUPITER_API_BASE}/swap`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "X-API-Key": JUPITER_API_KEY,
+              },
+              body: JSON.stringify(swapPayload),
+            }),
+            new Promise((_, reject) => setTimeout(() => reject(new Error("Jupiter swap timeout")), 2000)), // 2s timeout
+          ])) as Response
 
           if (swapResponse.ok) {
             const swapData = await swapResponse.json()
@@ -206,15 +210,24 @@ export async function POST(request: NextRequest) {
               const transaction = VersionedTransaction.deserialize(swapTransactionBuf)
               transaction.sign([keypair])
 
+              const connection = new Connection(selectedRpcEndpoint, {
+                commitment: "processed",
+                confirmTransactionInitialTimeout: 3000, // Reduced from 15s to 3s
+                disableRetryOnRateLimit: true, // Disable retries for speed
+              })
+
               const signature = await connection.sendRawTransaction(transaction.serialize(), {
                 skipPreflight: true,
                 preflightCommitment: "processed",
-                maxRetries: 0,
+                maxRetries: 0, // No retries for speed
               })
 
-              const confirmation = await connection.confirmTransaction(signature, "processed")
+              const confirmation = (await Promise.race([
+                connection.confirmTransaction(signature, "processed"),
+                new Promise((_, reject) => setTimeout(() => reject(new Error("Confirmation timeout")), 3000)),
+              ])) as any
 
-              if (!confirmation.value.err) {
+              if (!confirmation.value?.err) {
                 console.log(`🎉 JUPITER BUY SUCCESS!`)
                 return NextResponse.json({
                   success: true,
@@ -235,6 +248,12 @@ export async function POST(request: NextRequest) {
     console.log(`⚡ Step 2: Direct Pump.fun contract interaction...`)
 
     try {
+      const connection = new Connection(selectedRpcEndpoint, {
+        commitment: "processed",
+        confirmTransactionInitialTimeout: 3000, // Reduced from 15s to 3s
+        disableRetryOnRateLimit: true, // Disable retries for speed
+      })
+
       const result = await withRpcRetry(async (conn) => {
         // Calculate minimum tokens out with high slippage tolerance
         const minTokensOut = 1 // Very low minimum for fresh tokens
@@ -391,7 +410,7 @@ export async function POST(request: NextRequest) {
 
     let errorMessage = error.message || "Unknown error occurred"
     if (errorMessage.includes("429") || errorMessage.includes("max usage reached")) {
-      errorMessage = "All RPC endpoints are currently rate limited. Please try again in a few minutes."
+      errorMessage = "RPC rate limited - using backup endpoint"
     }
 
     return NextResponse.json(

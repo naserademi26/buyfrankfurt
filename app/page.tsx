@@ -240,7 +240,7 @@ export default function Home() {
         return
       }
 
-      const buyPromises = selectedWallets.map(async (wallet) => {
+      const buyPromises = selectedWallets.map(async (wallet, index) => {
         const balance = balances[wallet.pubkey] || 0
         const buyAmount = (balance * buyPerc) / 100 - 0.003
 
@@ -250,11 +250,16 @@ export default function Home() {
 
         try {
           const controller = new AbortController()
-          const timeoutId = setTimeout(() => controller.abort(), 6000)
+          const timeoutId = setTimeout(() => controller.abort(), 3000)
+
+          const rpcIndex = index % RPC_ENDPOINTS.length
 
           const res = await fetch("/api/buy", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: {
+              "Content-Type": "application/json",
+              "X-RPC-Index": rpcIndex.toString(),
+            },
             cache: "no-store",
             signal: controller.signal,
             body: JSON.stringify({
@@ -262,8 +267,9 @@ export default function Home() {
               tokenMint: mint,
               amount: buyAmount,
               slippage: Math.max(slippageBps / 100, 50),
-              priorityFee: 0.02,
+              priorityFee: 0.05,
               commitment: "processed",
+              skipBalanceCheck: true,
             }),
           })
 
@@ -280,7 +286,7 @@ export default function Home() {
         } catch (e: any) {
           return {
             wallet: wallet.pubkey,
-            error: e.name === "AbortError" ? "Timeout (6s)" : e.message,
+            error: e.name === "AbortError" ? "Timeout (3s)" : e.message,
             amount: buyAmount,
           }
         }
@@ -303,7 +309,8 @@ export default function Home() {
         failed: failed.length,
         successRate: `${((successful.length / selectedWallets.length) * 100).toFixed(1)}%`,
         totalAmount: successful.reduce((sum, r) => sum + (r.amount || 0), 0).toFixed(4),
-        rpcEndpoint: RPC_ENDPOINTS[currentRpcIndex].url.split("?")[0],
+        executionTime: "3s max per wallet",
+        rpcDistribution: "Load balanced across all endpoints",
       }
 
       setLog(JSON.stringify(summary, null, 2))
@@ -331,14 +338,19 @@ export default function Home() {
         return
       }
 
-      const sellPromises = selectedWallets.map(async (wallet) => {
+      const sellPromises = selectedWallets.map(async (wallet, index) => {
         try {
           const controller = new AbortController()
-          const timeoutId = setTimeout(() => controller.abort(), 6000)
+          const timeoutId = setTimeout(() => controller.abort(), 3000)
+
+          const rpcIndex = index % RPC_ENDPOINTS.length
 
           const res = await fetch("/api/sell", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: {
+              "Content-Type": "application/json",
+              "X-RPC-Index": rpcIndex.toString(),
+            },
             cache: "no-store",
             signal: controller.signal,
             body: JSON.stringify({
@@ -346,8 +358,9 @@ export default function Home() {
               privateKeys: [wallet.sk],
               percentage: sellPerc,
               slippageBps,
-              priorityFee: 0.02,
+              priorityFee: 0.05,
               commitment: "processed",
+              skipBalanceCheck: true,
             }),
           })
 
@@ -363,7 +376,7 @@ export default function Home() {
         } catch (e: any) {
           return {
             wallet: wallet.pubkey,
-            error: e.name === "AbortError" ? "Timeout (6s)" : e.message,
+            error: e.name === "AbortError" ? "Timeout (3s)" : e.message,
           }
         }
       })
@@ -384,7 +397,8 @@ export default function Home() {
         successful: successful.length,
         failed: failed.length,
         successRate: `${((successful.length / selectedWallets.length) * 100).toFixed(1)}%`,
-        rpcEndpoint: RPC_ENDPOINTS[currentRpcIndex].url.split("?")[0],
+        executionTime: "3s max per wallet",
+        rpcDistribution: "Load balanced across all endpoints",
       }
 
       setLog(JSON.stringify(summary, null, 2))
