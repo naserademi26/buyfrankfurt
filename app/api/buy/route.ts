@@ -81,7 +81,7 @@ export async function POST(request: NextRequest) {
     // Create connection
     const connection = new Connection(RPC_ENDPOINTS[0], {
       commitment: "processed",
-      confirmTransactionInitialTimeout: 30000,
+      confirmTransactionInitialTimeout: 6000, // Reduced from 30000 to 6000ms
       httpHeaders: {
         Authorization: `Bearer ${DRPC_API_TOKEN}`,
         "Content-Type": "application/json",
@@ -89,9 +89,13 @@ export async function POST(request: NextRequest) {
     })
 
     // Check wallet balance
-    const balance = await connection.getBalance(keypair.publicKey)
-    const balanceSOL = balance / LAMPORTS_PER_SOL
+    const balancePromise = connection.getBalance(keypair.publicKey)
+    const balance = (await Promise.race([
+      balancePromise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error("Balance check timeout")), 3000)),
+    ])) as number
 
+    const balanceSOL = balance / LAMPORTS_PER_SOL
     console.log(`💰 Balance: ${balanceSOL} SOL`)
 
     if (balanceSOL < amount + 0.01) {
@@ -113,13 +117,16 @@ export async function POST(request: NextRequest) {
     try {
       const quoteUrl = `${JUPITER_API_BASE}/quote?inputMint=So11111111111111111111111111111111111111112&outputMint=${tokenMint}&amount=${amountLamports}&slippageBps=${slippageBps}&onlyDirectRoutes=false`
 
-      const quoteResponse = await fetch(quoteUrl, {
-        method: "GET",
-        headers: {
-          Accept: "application/json",
-          "X-API-Key": JUPITER_API_KEY,
-        },
-      })
+      const quoteResponse = (await Promise.race([
+        fetch(quoteUrl, {
+          method: "GET",
+          headers: {
+            Accept: "application/json",
+            "X-API-Key": JUPITER_API_KEY,
+          },
+        }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("Jupiter quote timeout")), 2000)),
+      ])) as Response
 
       if (quoteResponse.ok) {
         const quoteData = await quoteResponse.json()
@@ -143,14 +150,17 @@ export async function POST(request: NextRequest) {
             dynamicComputeUnitLimit: true,
           }
 
-          const swapResponse = await fetch(`${JUPITER_API_BASE}/swap`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "X-API-Key": JUPITER_API_KEY,
-            },
-            body: JSON.stringify(swapPayload),
-          })
+          const swapResponse = (await Promise.race([
+            fetch(`${JUPITER_API_BASE}/swap`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "X-API-Key": JUPITER_API_KEY,
+              },
+              body: JSON.stringify(swapPayload),
+            }),
+            new Promise((_, reject) => setTimeout(() => reject(new Error("Jupiter swap timeout")), 2000)),
+          ])) as Response
 
           if (swapResponse.ok) {
             const swapData = await swapResponse.json()
@@ -166,9 +176,12 @@ export async function POST(request: NextRequest) {
                 maxRetries: 0,
               })
 
-              const confirmation = await connection.confirmTransaction(signature, "processed")
+              const confirmation = (await Promise.race([
+                connection.confirmTransaction(signature, "processed"),
+                new Promise((_, reject) => setTimeout(() => reject(new Error("Confirmation timeout")), 4000)),
+              ])) as any
 
-              if (!confirmation.value.err) {
+              if (!confirmation.value?.err) {
                 console.log(`🎉 JUPITER BUY SUCCESS!`)
                 return NextResponse.json({
                   success: true,
@@ -189,10 +202,6 @@ export async function POST(request: NextRequest) {
     console.log(`⚡ Step 2: Direct Pump.fun contract interaction...`)
 
     try {
-      // Calculate minimum tokens out with high slippage tolerance
-      const minTokensOut = 1 // Very low minimum for fresh tokens
-
-      // Create buy instruction for Pump.fun
       const tokenMintPubkey = new PublicKey(tokenMint)
 
       // Correct PDA derivations for Pump.fun
@@ -210,10 +219,10 @@ export async function POST(request: NextRequest) {
       const userTokenAccount = await getAssociatedTokenAddress(tokenMintPubkey, keypair.publicKey)
 
       // Check if accounts exist
-      const [bondingCurveInfo, userTokenAccountInfo] = await Promise.all([
-        connection.getAccountInfo(bondingCurve),
-        connection.getAccountInfo(userTokenAccount),
-      ])
+      const [bondingCurveInfo, userTokenAccountInfo] = (await Promise.race([
+        Promise.all([connection.getAccountInfo(bondingCurve), connection.getAccountInfo(userTokenAccount)]),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("Account info timeout")), 2000)),
+      ])) as any
 
       if (!bondingCurveInfo) {
         return NextResponse.json(
@@ -270,7 +279,10 @@ export async function POST(request: NextRequest) {
       instructions.push(buyInstruction)
 
       // Create transaction with recent blockhash
-      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("finalized")
+      const { blockhash, lastValidBlockHeight } = (await Promise.race([
+        connection.getLatestBlockhash("finalized"),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("Blockhash timeout")), 2000)),
+      ])) as any
 
       const messageV0 = new TransactionMessage({
         payerKey: keypair.publicKey,
@@ -287,7 +299,7 @@ export async function POST(request: NextRequest) {
       const signature = await connection.sendRawTransaction(transaction.serialize(), {
         skipPreflight: false, // Enable preflight for better error messages
         preflightCommitment: "processed",
-        maxRetries: 3,
+        maxRetries: 1,
       })
 
       console.log(`📡 Transaction sent: ${signature}`)
@@ -302,7 +314,7 @@ export async function POST(request: NextRequest) {
           },
           "processed",
         ),
-        new Promise((_, reject) => setTimeout(() => reject(new Error("Transaction confirmation timeout")), 30000)),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("Transaction confirmation timeout")), 4000)),
       ])) as any
 
       if (confirmation.value?.err) {
@@ -331,6 +343,8 @@ export async function POST(request: NextRequest) {
       let errorMessage = directError.message || "Unknown error"
       if (errorMessage.includes("insufficient funds")) {
         errorMessage = "Insufficient SOL balance for transaction"
+      } else if (errorMessage.includes("timeout")) {
+        errorMessage = "Transaction timeout - network congestion"
       } else if (errorMessage.includes("blockhash not found")) {
         errorMessage = "Network congestion - try again"
       } else if (errorMessage.includes("InvalidAccountData")) {
@@ -341,7 +355,6 @@ export async function POST(request: NextRequest) {
         {
           success: false,
           error: `Direct Pump.fun transaction failed: ${errorMessage}`,
-          details: directError.stack,
         },
         { status: 500 },
       )
@@ -352,7 +365,6 @@ export async function POST(request: NextRequest) {
       {
         success: false,
         error: error.message || "Unknown error occurred",
-        details: error.stack,
       },
       { status: 500 },
     )
