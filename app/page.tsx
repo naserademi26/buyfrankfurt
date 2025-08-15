@@ -13,9 +13,9 @@ interface TokenInfo {
 }
 
 const RPC_ENDPOINTS = [
+  "http://fra-sender.helius-rpc.com/fast",
+  "https://anitra-p4zjjp-fast-mainnet.helius-rpc.com",
   "https://mainnet.helius-rpc.com/?api-key=785c7d18-85fe-4925-b949-50e533aec16e",
-  "https://api.mainnet-beta.solana.com",
-  "https://rpc.ankr.com/solana",
 ]
 
 function createConnectionWithAuth(endpoint: string) {
@@ -56,46 +56,42 @@ export default function Home() {
 
   useEffect(() => {
     let mounted = true
-    let retryCount = 0
 
     const checkRpcHealth = async () => {
       try {
         const startTime = Date.now()
+        const controller = new AbortController()
+        const timeoutId = setTimeout(() => controller.abort(), 3000)
+
         await connection.getLatestBlockhash("confirmed")
+        clearTimeout(timeoutId)
+
         const latency = Date.now() - startTime
 
         if (mounted) {
           setRpcOk(true)
           setRpcLatency(latency)
-          retryCount = 0 // Reset retry count on success
         }
       } catch (error: any) {
         console.error(`[v0] RPC health check failed for ${RPC_ENDPOINTS[currentRpcIndex]}:`, error)
 
-        if (mounted && retryCount < RPC_ENDPOINTS.length - 1) {
-          // Try next RPC endpoint
-          retryCount++
+        if (mounted) {
           const nextIndex = (currentRpcIndex + 1) % RPC_ENDPOINTS.length
           console.log(`[v0] Switching to RPC endpoint ${nextIndex}: ${RPC_ENDPOINTS[nextIndex]}`)
 
           setCurrentRpcIndex(nextIndex)
           setConnection(createConnectionWithAuth(RPC_ENDPOINTS[nextIndex]))
 
-          // Retry with new endpoint after short delay
           setTimeout(() => {
             if (mounted) checkRpcHealth()
-          }, 1000)
-        } else if (mounted) {
-          setRpcOk(false)
-          setRpcLatency(null)
+          }, 100)
         }
       }
     }
 
     checkRpcHealth()
 
-    // Check RPC health every 30 seconds
-    const interval = setInterval(checkRpcHealth, 30000)
+    const interval = setInterval(checkRpcHealth, 10000)
 
     return () => {
       mounted = false
@@ -723,6 +719,8 @@ function sanitizeMintInput(input: string): string {
 }
 
 function getRpcProviderName(endpoint: string): string {
+  if (endpoint.includes("fra-sender.helius-rpc.com")) return "Helius Fast"
+  if (endpoint.includes("anitra-p4zjjp-fast-mainnet.helius-rpc.com")) return "Helius Ultra"
   if (endpoint.includes("helius-rpc.com")) return "Helius"
   if (endpoint.includes("alchemy.com")) return "Alchemy"
   if (endpoint.includes("mainnet-beta.solana.com")) return "Solana"
