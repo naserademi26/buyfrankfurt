@@ -5,10 +5,8 @@ import bs58 from "bs58"
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
-const HELIUS_RPC_URL =
-  process.env.HELIUS_RPC_URL ||
-  process.env.NEXT_PUBLIC_RPC_URL ||
-  "https://mainnet.helius-rpc.com/?api-key=785c7d18-85fe-4925-b949-50e533aec16e"
+const DRPC_RPC_URL = "https://lb.drpc.org/solana/AoLSJPx3VEsDmDDks2UasTR-g70MeVMR8Is_IgaNGuYu"
+const DRPC_API_TOKEN = "cc41c7e9dbbb70e05b92558fe0699ec61f30bd40198747e770d321ed9f5f61c7"
 
 const BXR_RAW_KEY =
   process.env.BLOXROUTE_API_KEY ||
@@ -457,7 +455,14 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, error: "Invalid percentage" }, { status: 400 })
     }
 
-    const connection = new Connection(HELIUS_RPC_URL, { commitment: "processed" })
+    const connection = new Connection(DRPC_RPC_URL, {
+      commitment: "processed",
+      httpHeaders: {
+        Authorization: `Bearer ${DRPC_API_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+    })
+
     const walletLimit = Math.min(privateKeys.length, limitWallets)
     const tasks: Promise<WalletResult>[] = []
 

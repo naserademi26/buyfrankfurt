@@ -9,10 +9,12 @@ const JUPITER_API_KEY = "2f280df-aa16-4c78-979c-6468f660dbfb"
 
 // Premium RPC endpoints
 const RPC_ENDPOINTS = [
-  "https://mainnet.helius-rpc.com/?api-key=785c7d18-85fe-4925-b949-50e533aec16e",
-  "https://rpc.helius.xyz/?api-key=785c7d18-85fe-4925-b949-50e533aec16e",
+  "https://lb.drpc.org/solana/AoLSJPx3VEsDmDDks2UasTR-g70MeVMR8Is_IgaNGuYu",
+  "https://solana-mainnet.core.chainstack.com/1dddd2834b79c0f3f43138bd4a45e3eb",
   "https://api.mainnet-beta.solana.com",
 ]
+
+const DRPC_API_TOKEN = "cc41c7e9dbbb70e05b92558fe0699ec61f30bd40198747e770d321ed9f5f61c7"
 
 // Pump.fun program constants
 const PUMP_FUN_PROGRAM = new PublicKey("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P")
@@ -80,6 +82,10 @@ export async function POST(request: NextRequest) {
     const connection = new Connection(RPC_ENDPOINTS[0], {
       commitment: "processed",
       confirmTransactionInitialTimeout: 30000,
+      httpHeaders: {
+        Authorization: `Bearer ${DRPC_API_TOKEN}`,
+        "Content-Type": "application/json",
+      },
     })
 
     // Check wallet balance

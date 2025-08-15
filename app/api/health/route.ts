@@ -4,11 +4,8 @@ import { Connection } from "@solana/web3.js"
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
-const HELIUS_RPC_URL =
-  process.env.HELIUS_RPC_URL ||
-  process.env.NEXT_PUBLIC_RPC_URL ||
-  process.env.NEXT_PUBLIC_HELIUS_RPC_URL ||
-  "https://mainnet.helius-rpc.com/?api-key=785c7d18-85fe-4925-b949-50e533aec16e"
+const DRPC_RPC_URL = "https://lb.drpc.org/solana/AoLSJPx3VEsDmDDks2UasTR-g70MeVMR8Is_IgaNGuYu"
+const DRPC_API_TOKEN = "cc41c7e9dbbb70e05b92558fe0699ec61f30bd40198747e770d321ed9f5f61c7"
 
 const BXR_REGION = process.env.BLOXROUTE_REGION_URL || "https://ny.solana.dex.blxrbdn.com"
 const BXR_SUBMIT = process.env.BLOXROUTE_SUBMIT_URL || "https://global.solana.dex.blxrbdn.com"
@@ -21,7 +18,13 @@ export async function GET() {
 
   // RPC test
   try {
-    const conn = new Connection(HELIUS_RPC_URL, { commitment: "confirmed" })
+    const conn = new Connection(DRPC_RPC_URL, {
+      commitment: "confirmed",
+      httpHeaders: {
+        Authorization: `Bearer ${DRPC_API_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+    })
     const bh = await conn.getLatestBlockhash("confirmed")
     out.rpc = { ok: true, lastValidBlockHeight: bh.lastValidBlockHeight }
   } catch (e: any) {
