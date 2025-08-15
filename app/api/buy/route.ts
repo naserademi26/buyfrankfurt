@@ -8,11 +8,9 @@ const JUPITER_API_BASE = "https://quote-api.jup.ag/v6"
 const JUPITER_API_KEY = "2f280df-aa16-4c78-979c-6468f660dbfb"
 
 const RPC_ENDPOINTS = [
-  "https://solana-mainnet.core.chainstack.com/1dddd2834b79c0f3f43138bd4a45e3eb",
+  "https://mainnet.helius-rpc.com/?api-key=2f61447e-3692-4117-af32-97a37e847e82",
   "https://api.mainnet-beta.solana.com",
-  "https://solana-mainnet.g.alchemy.com/v2/xPZFpP1qn7EApXWTwYAdP",
   "https://rpc.ankr.com/solana",
-  "https://solana.blockdaemon.com",
 ]
 
 async function createConnectionWithFailover(): Promise<Connection> {
@@ -48,7 +46,7 @@ async function executeWithRPCFailover<T>(operation: (connection: Connection) => 
       })
 
       return await operation(connection)
-    } catch (error: any) {
+    } catch (error) {
       if (error.message?.includes("429") || error.code === 429) {
         console.log(`⚠️ Rate limited on ${endpoint}, switching immediately...`)
         continue // Immediately try next endpoint on 429

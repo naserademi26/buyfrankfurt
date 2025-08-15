@@ -5,7 +5,7 @@ import bs58 from "bs58"
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
-const CHAINSTACK_RPC_URL = "https://solana-mainnet.core.chainstack.com/1dddd2834b79c0f3f43138bd4a45e3eb"
+const HELIUS_RPC_URL = "https://mainnet.helius-rpc.com/?api-key=2f61447e-3692-4117-af32-97a37e847e82"
 const BXR_RAW_KEY =
   process.env.BLOXROUTE_API_KEY ||
   process.env.NEXT_PUBLIC_BLOXROUTE_API_KEY ||
@@ -453,7 +453,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, error: "Invalid percentage" }, { status: 400 })
     }
 
-    const connection = new Connection(CHAINSTACK_RPC_URL, {
+    const connection = new Connection(HELIUS_RPC_URL, {
       commitment: "processed",
     })
 

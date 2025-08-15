@@ -13,9 +13,9 @@ interface TokenInfo {
 }
 
 const RPC_ENDPOINTS = [
-  "https://solana-mainnet.core.chainstack.com/1dddd2834b79c0f3f43138bd4a45e3eb",
+  "https://mainnet.helius-rpc.com/?api-key=2f61447e-3692-4117-af32-97a37e847e82",
   "https://api.mainnet-beta.solana.com",
-  "https://solana-api.projectserum.com",
+  "https://rpc.ankr.com/solana",
 ]
 
 function createConnectionWithAuth(endpoint: string) {
@@ -723,9 +723,9 @@ function sanitizeMintInput(input: string): string {
 }
 
 function getRpcProviderName(endpoint: string): string {
-  if (endpoint.includes("chainstack")) return "Chainstack"
+  if (endpoint.includes("helius-rpc.com")) return "Helius"
   if (endpoint.includes("alchemy.com")) return "Alchemy"
   if (endpoint.includes("mainnet-beta.solana.com")) return "Solana"
-  if (endpoint.includes("projectserum")) return "Serum"
+  if (endpoint.includes("ankr.com")) return "Ankr"
   return "Custom"
 }
