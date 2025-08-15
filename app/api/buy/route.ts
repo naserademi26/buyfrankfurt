@@ -13,6 +13,14 @@ const RPC_ENDPOINTS = [
   "https://rpc.ankr.com/solana",
 ]
 
+const FAST_RPC_ENDPOINTS = [
+  "http://fra-sender.helius-rpc.com/fast",
+  "https://anitra-p4zjjp-fast-mainnet.helius-rpc.com",
+  "https://mainnet.helius-rpc.com/?api-key=785c7d18-85fe-4925-b949-50e533aec16e",
+  "https://api.mainnet-beta.solana.com",
+  "https://rpc.ankr.com/solana",
+]
+
 async function createConnectionWithFailover(): Promise<Connection> {
   for (const endpoint of RPC_ENDPOINTS) {
     try {
@@ -60,6 +68,67 @@ async function executeWithRPCFailover<T>(operation: (connection: Connection) => 
     }
   }
   throw new Error("All RPC endpoints exhausted")
+}
+
+async function createLightningConnection(): Promise<Connection[]> {
+  const connections = FAST_RPC_ENDPOINTS.map(
+    (endpoint) =>
+      new Connection(endpoint, {
+        commitment: "processed",
+        confirmTransactionInitialTimeout: 1000, // Ultra-fast 1s timeout
+        wsEndpoint: undefined, // Disable websockets for speed
+      }),
+  )
+  return connections
+}
+
+async function submitTransactionLightning(transaction: VersionedTransaction): Promise<string> {
+  const connections = await createLightningConnection()
+
+  // Submit to all endpoints simultaneously for maximum speed
+  const submissions = connections.map(async (connection, index) => {
+    try {
+      const signature = await connection.sendRawTransaction(transaction.serialize(), {
+        skipPreflight: true, // Skip preflight for maximum speed
+        preflightCommitment: "processed",
+        maxRetries: 0, // No retries, fire and forget
+      })
+      console.log(`⚡ Lightning submission ${index + 1} sent: ${signature}`)
+      return signature
+    } catch (error) {
+      console.log(`⚠️ Fast endpoint ${index + 1} failed, continuing...`)
+      throw error
+    }
+  })
+
+  // Return the first successful submission
+  return await Promise.any(submissions)
+}
+
+async function getLightningBalance(publicKey: PublicKey): Promise<number> {
+  const connections = await createLightningConnection()
+
+  const balanceChecks = connections.map((connection) =>
+    Promise.race([
+      connection.getBalance(publicKey),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("Lightning balance timeout")), 500)),
+    ]),
+  )
+
+  return (await Promise.any(balanceChecks)) as number
+}
+
+async function getLightningBlockhash() {
+  const connections = await createLightningConnection()
+
+  const blockhashRequests = connections.map((connection) =>
+    Promise.race([
+      connection.getLatestBlockhash("processed"), // Use processed for speed
+      new Promise((_, reject) => setTimeout(() => reject(new Error("Blockhash timeout")), 500)),
+    ]),
+  )
+
+  return await Promise.any(blockhashRequests)
 }
 
 interface BuyRequest {

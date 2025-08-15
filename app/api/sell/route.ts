@@ -5,6 +5,14 @@ import bs58 from "bs58"
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
+const FAST_RPC_ENDPOINTS = [
+  "http://fra-sender.helius-rpc.com/fast",
+  "https://anitra-p4zjjp-fast-mainnet.helius-rpc.com",
+  "https://mainnet.helius-rpc.com/?api-key=785c7d18-85fe-4925-b949-50e533aec16e",
+  "https://api.mainnet-beta.solana.com",
+  "https://rpc.ankr.com/solana",
+]
+
 const HELIUS_RPC_URL = "https://mainnet.helius-rpc.com/?api-key=785c7d18-85fe-4925-b949-50e533aec16e"
 const BXR_RAW_KEY =
   process.env.BLOXROUTE_API_KEY ||
@@ -22,6 +30,40 @@ const JUP_API_KEY =
   process.env.NEXT_PUBLIC_JUP_API_KEY ||
   process.env.NEXT_PUBLIC_JUPITER_API_KEY ||
   "2f280df-aa16-4c78-979c-6468f660dbfb"
+
+async function createLightningConnections(): Promise<Connection[]> {
+  return FAST_RPC_ENDPOINTS.map(
+    (endpoint) =>
+      new Connection(endpoint, {
+        commitment: "processed",
+        confirmTransactionInitialTimeout: 800, // Ultra-fast 800ms timeout
+        wsEndpoint: undefined, // Disable websockets for speed
+      }),
+  )
+}
+
+async function submitTransactionLightning(transaction: VersionedTransaction): Promise<string> {
+  const connections = await createLightningConnections()
+
+  // Submit to all endpoints simultaneously for maximum speed
+  const submissions = connections.map(async (connection, index) => {
+    try {
+      const signature = await connection.sendRawTransaction(transaction.serialize(), {
+        skipPreflight: true, // Skip preflight for maximum speed
+        preflightCommitment: "processed",
+        maxRetries: 0, // No retries, fire and forget
+      })
+      console.log(`⚡ Lightning sell submission ${index + 1} sent: ${signature}`)
+      return signature
+    } catch (error) {
+      console.log(`⚠️ Fast sell endpoint ${index + 1} failed, continuing...`)
+      throw error
+    }
+  })
+
+  // Return the first successful submission
+  return await Promise.any(submissions)
+}
 
 interface SellRequest {
   mint: string
@@ -133,7 +175,6 @@ async function sellTokensForWallet(
       `Wallet ${wallet}: Balance=${uiBalance}, Selling ${percentage}% = ${sellAmountUI} tokens (${sellAmountRaw} raw)`,
     )
 
-    // Try bloXroute first, then Jupiter fallback with improved error handling
     let swapTransaction: string | null = null
     let expectedSOL = 0
     let bxrSwapStatus = 0
@@ -162,7 +203,7 @@ async function sellTokensForWallet(
               computePrice: 8_000_000, // Reduced compute price
             }),
           }),
-          new Promise((_, reject) => setTimeout(() => reject(new Error("bloXroute timeout")), 12000)),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("bloXroute timeout")), 3000)), // Reduced from 12s to 3s
         ])) as Response
 
         bxrSwapStatus = bxrSwapRes.status
@@ -200,7 +241,7 @@ async function sellTokensForWallet(
             headers: jupHeaders,
             cache: "no-store",
           }),
-          new Promise((_, reject) => setTimeout(() => reject(new Error("Jupiter quote timeout")), 12000)),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("Jupiter quote timeout")), 2000)), // Reduced from 12s to 2s
         ])) as Response
 
         jupQuoteStatus = jupQuoteRes.status
@@ -292,7 +333,7 @@ async function sellTokensForWallet(
               skipUserAccountsRpcCalls: true,
             }),
           }),
-          new Promise((_, reject) => setTimeout(() => reject(new Error("Jupiter swap timeout")), 12000)),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("Jupiter swap timeout")), 2000)), // Reduced from 12s to 2s
         ])) as Response
 
         jupSwapStatus = jupSwapRes.status
@@ -364,72 +405,24 @@ async function sellTokensForWallet(
     const txBuf = Buffer.from(swapTransaction, "base64")
     const tx = VersionedTransaction.deserialize(txBuf)
     tx.sign([keypair])
-    const serializedTx = tx.serialize()
 
-    const submitPromises = []
+    try {
+      const signature = await submitTransactionLightning(tx)
 
-    // bloXroute submit with timeout
-    if (BXR_AUTH) {
-      submitPromises.push(
-        Promise.race([
-          fetch(`${BXR_SUBMIT}/api/v2/submit`, {
-            method: "POST",
-            headers: {
-              Authorization: BXR_AUTH,
-              "Content-Type": "application/json",
-              Accept: "application/json",
-            },
-            body: JSON.stringify({
-              transaction: { content: Buffer.from(serializedTx).toString("base64") },
-              skipPreFlight: true,
-              submitProtection: "SP_LOW", // Reduced protection for faster submission
-            }),
-          }).then((r) => (r.ok ? r.json().then((j) => j.signature || j?.signatures?.[0] || "submitted") : null)),
-          new Promise((_, reject) => setTimeout(() => reject(new Error("bloXroute submit timeout")), 8000)),
-        ]),
-      )
-    }
-
-    // Direct RPC submit with retry
-    submitPromises.push(
-      Promise.race([
-        connection.sendRawTransaction(serializedTx, {
-          skipPreflight: true,
-          maxRetries: 2, // Added retries
-          preflightCommitment: "processed",
-        }),
-        new Promise((_, reject) => setTimeout(() => reject(new Error("RPC submit timeout")), 8000)),
-      ]),
-    )
-
-    const results = await Promise.allSettled(submitPromises.filter(Boolean))
-    let signature = null
-
-    for (const result of results) {
-      if (result.status === "fulfilled" && result.value) {
-        signature = result.value
-        break
+      return {
+        wallet,
+        success: true,
+        signature,
+        soldTokens: sellAmountUI.toFixed(6),
+        receivedSOL: expectedSOL.toFixed(6),
+        solscanUrl: `https://solscan.io/tx/${signature}`,
       }
-    }
-
-    if (!signature) {
-      const errors = results
-        .filter((r) => r.status === "rejected")
-        .map((r: any) => r.reason?.message || String(r.reason))
+    } catch (error: any) {
       return {
         wallet,
         success: false,
-        error: `Transaction broadcast failed: ${errors.join(" | ")}`,
+        error: `Lightning transaction failed: ${error.message}`,
       }
-    }
-
-    return {
-      wallet,
-      success: true,
-      signature,
-      soldTokens: sellAmountUI.toFixed(6),
-      receivedSOL: expectedSOL.toFixed(6),
-      solscanUrl: `https://solscan.io/tx/${signature}`,
     }
   } catch (error: any) {
     return {
