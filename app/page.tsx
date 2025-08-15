@@ -13,25 +13,15 @@ interface TokenInfo {
 }
 
 const RPC_ENDPOINTS = [
-  "https://lb.drpc.org/solana/AoLSJPx3VEsDmDDks2UasTR-g70MeVMR8Is_IgaNGuYu",
+  "https://solana-mainnet.g.alchemy.com/v2/xPZFpP1qn7EApXWTwYAdP",
   "https://solana-mainnet.core.chainstack.com/1dddd2834b79c0f3f43138bd4a45e3eb",
   "https://api.mainnet-beta.solana.com",
   "https://solana-api.projectserum.com",
 ]
 
-const DRPC_API_TOKEN = "cc41c7e9dbbb70e05b92558fe0699ec61f30bd40198747e770d321ed9f5f61c7"
-
 function createConnectionWithAuth(endpoint: string) {
   const config: any = { commitment: "confirmed" }
-
-  // Add authentication headers for dRPC
-  if (endpoint.includes("drpc.org")) {
-    config.httpHeaders = {
-      Authorization: `Bearer ${DRPC_API_TOKEN}`,
-      "Content-Type": "application/json",
-    }
-  }
-
+  // Alchemy doesn't require special authentication headers
   return new Connection(endpoint, config)
 }
 
@@ -735,7 +725,7 @@ function sanitizeMintInput(input: string): string {
 }
 
 function getRpcProviderName(endpoint: string): string {
-  if (endpoint.includes("drpc.org")) return "dRPC"
+  if (endpoint.includes("alchemy.com")) return "Alchemy"
   if (endpoint.includes("chainstack")) return "Chainstack"
   if (endpoint.includes("mainnet-beta.solana.com")) return "Solana"
   if (endpoint.includes("projectserum")) return "Serum"
