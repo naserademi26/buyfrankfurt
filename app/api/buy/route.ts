@@ -7,12 +7,67 @@ import { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction } fr
 const JUPITER_API_BASE = "https://quote-api.jup.ag/v6"
 const JUPITER_API_KEY = "2f280df-aa16-4c78-979c-6468f660dbfb"
 
-// Premium RPC endpoints
 const RPC_ENDPOINTS = [
+  "https://solana-mainnet.core.chainstack.com/1dddd2834b79c0f3f43138bd4a45e3eb",
   "https://mainnet.helius-rpc.com/?api-key=785c7d18-85fe-4925-b949-50e533aec16e",
   "https://rpc.helius.xyz/?api-key=785c7d18-85fe-4925-b949-50e533aec16e",
   "https://api.mainnet-beta.solana.com",
+  "https://rpc.ankr.com/solana",
 ]
+
+async function createConnectionWithRetry(): Promise<Connection> {
+  for (let i = 0; i < RPC_ENDPOINTS.length; i++) {
+    try {
+      const connection = new Connection(RPC_ENDPOINTS[i], {
+        commitment: "processed",
+        confirmTransactionInitialTimeout: 15000,
+      })
+
+      // Test the connection with a quick call
+      await connection.getSlot()
+      console.log(`✅ Connected to RPC endpoint ${i + 1}: ${RPC_ENDPOINTS[i].split("/")[2]}`)
+      return connection
+    } catch (error: any) {
+      console.log(`⚠️ RPC endpoint ${i + 1} failed: ${error.message}`)
+      if (i === RPC_ENDPOINTS.length - 1) {
+        throw new Error("All RPC endpoints failed")
+      }
+    }
+  }
+  throw new Error("No RPC endpoints available")
+}
+
+async function withRpcRetry<T>(operation: (connection: Connection) => Promise<T>): Promise<T> {
+  let lastError: Error | null = null
+
+  for (let i = 0; i < RPC_ENDPOINTS.length; i++) {
+    try {
+      const connection = new Connection(RPC_ENDPOINTS[i], {
+        commitment: "processed",
+        confirmTransactionInitialTimeout: 15000,
+      })
+
+      return await operation(connection)
+    } catch (error: any) {
+      lastError = error
+      console.log(`⚠️ RPC ${i + 1} failed: ${error.message}`)
+
+      // If it's a rate limit error, try next endpoint immediately
+      if (error.message?.includes("429") || error.message?.includes("max usage reached")) {
+        console.log(`🔄 Rate limited on RPC ${i + 1}, switching to next endpoint...`)
+        continue
+      }
+
+      // For other errors, also try next endpoint
+      if (i < RPC_ENDPOINTS.length - 1) {
+        await new Promise((resolve) => setTimeout(resolve, 500)) // Brief delay
+        continue
+      }
+    }
+  }
+
+  throw lastError || new Error("All RPC endpoints failed")
+}
 
 // Pump.fun program constants
 const PUMP_FUN_PROGRAM = new PublicKey("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P")
@@ -76,14 +131,11 @@ export async function POST(request: NextRequest) {
 
     console.log(`💰 Wallet: ${keypair.publicKey.toString()}`)
 
-    // Create connection
-    const connection = new Connection(RPC_ENDPOINTS[0], {
-      commitment: "processed",
-      confirmTransactionInitialTimeout: 30000,
+    const { balance, connection } = await withRpcRetry(async (conn) => {
+      const bal = await conn.getBalance(keypair.publicKey)
+      return { balance: bal, connection: conn }
     })
 
-    // Check wallet balance
-    const balance = await connection.getBalance(keypair.publicKey)
     const balanceSOL = balance / LAMPORTS_PER_SOL
 
     console.log(`💰 Balance: ${balanceSOL} SOL`)
@@ -183,139 +235,132 @@ export async function POST(request: NextRequest) {
     console.log(`⚡ Step 2: Direct Pump.fun contract interaction...`)
 
     try {
-      // Calculate minimum tokens out with high slippage tolerance
-      const minTokensOut = 1 // Very low minimum for fresh tokens
+      const result = await withRpcRetry(async (conn) => {
+        // Calculate minimum tokens out with high slippage tolerance
+        const minTokensOut = 1 // Very low minimum for fresh tokens
 
-      // Create buy instruction for Pump.fun
-      const tokenMintPubkey = new PublicKey(tokenMint)
+        // Create buy instruction for Pump.fun
+        const tokenMintPubkey = new PublicKey(tokenMint)
 
-      // Correct PDA derivations for Pump.fun
-      const [bondingCurve] = PublicKey.findProgramAddressSync(
-        [Buffer.from("bonding-curve"), tokenMintPubkey.toBuffer()],
-        PUMP_FUN_PROGRAM,
-      )
-
-      const [associatedBondingCurve] = PublicKey.findProgramAddressSync(
-        [bondingCurve.toBuffer(), tokenMintPubkey.toBuffer(), Buffer.from("associated-token-account")],
-        PUMP_FUN_PROGRAM,
-      )
-
-      // Get user's associated token account
-      const userTokenAccount = await getAssociatedTokenAddress(tokenMintPubkey, keypair.publicKey)
-
-      // Check if accounts exist
-      const [bondingCurveInfo, userTokenAccountInfo] = await Promise.all([
-        connection.getAccountInfo(bondingCurve),
-        connection.getAccountInfo(userTokenAccount),
-      ])
-
-      if (!bondingCurveInfo) {
-        return NextResponse.json(
-          { success: false, error: "Token bonding curve not found - token may not be a valid Pump.fun token" },
-          { status: 400 },
+        // Correct PDA derivations for Pump.fun
+        const [bondingCurve] = PublicKey.findProgramAddressSync(
+          [Buffer.from("bonding-curve"), tokenMintPubkey.toBuffer()],
+          PUMP_FUN_PROGRAM,
         )
-      }
 
-      const instructions = []
+        const [associatedBondingCurve] = PublicKey.findProgramAddressSync(
+          [bondingCurve.toBuffer(), tokenMintPubkey.toBuffer(), Buffer.from("associated-token-account")],
+          PUMP_FUN_PROGRAM,
+        )
 
-      // Add high priority compute budget
-      instructions.push(
-        ComputeBudgetProgram.setComputeUnitPrice({
-          microLamports: 200000, // Higher priority for fresh tokens
-        }),
-        ComputeBudgetProgram.setComputeUnitLimit({
-          units: 300000, // Higher compute limit
-        }),
-      )
+        // Get user's associated token account
+        const userTokenAccount = await getAssociatedTokenAddress(tokenMintPubkey, keypair.publicKey)
 
-      // Create associated token account if needed
-      if (!userTokenAccountInfo) {
+        // Check if accounts exist
+        const [bondingCurveInfo, userTokenAccountInfo] = await Promise.all([
+          conn.getAccountInfo(bondingCurve),
+          conn.getAccountInfo(userTokenAccount),
+        ])
+
+        if (!bondingCurveInfo) {
+          throw new Error("Token bonding curve not found - token may not be a valid Pump.fun token")
+        }
+
+        const instructions = []
+
+        // Add high priority compute budget
         instructions.push(
-          createAssociatedTokenAccountInstruction(
-            keypair.publicKey,
-            userTokenAccount,
-            keypair.publicKey,
-            tokenMintPubkey,
+          ComputeBudgetProgram.setComputeUnitPrice({
+            microLamports: 200000, // Higher priority for fresh tokens
+          }),
+          ComputeBudgetProgram.setComputeUnitLimit({
+            units: 300000, // Higher compute limit
+          }),
+        )
+
+        // Create associated token account if needed
+        if (!userTokenAccountInfo) {
+          instructions.push(
+            createAssociatedTokenAccountInstruction(
+              keypair.publicKey,
+              userTokenAccount,
+              keypair.publicKey,
+              tokenMintPubkey,
+            ),
+          )
+        }
+
+        // Correct Pump.fun buy instruction
+        const buyInstructionData = Buffer.alloc(24)
+        buyInstructionData.writeUInt32LE(0x66063d12, 0) // Buy method discriminator
+        buyInstructionData.writeBigUInt64LE(BigInt(amountLamports), 8) // SOL amount
+        buyInstructionData.writeBigUInt64LE(BigInt(1), 16) // Min tokens out (very low for fresh tokens)
+
+        const buyInstruction = {
+          programId: PUMP_FUN_PROGRAM,
+          keys: [
+            { pubkey: PUMP_FUN_GLOBAL, isSigner: false, isWritable: false },
+            { pubkey: PUMP_FUN_FEE_RECIPIENT, isSigner: false, isWritable: true },
+            { pubkey: tokenMintPubkey, isSigner: false, isWritable: false },
+            { pubkey: bondingCurve, isSigner: false, isWritable: true },
+            { pubkey: associatedBondingCurve, isSigner: false, isWritable: true },
+            { pubkey: userTokenAccount, isSigner: false, isWritable: true },
+            { pubkey: keypair.publicKey, isSigner: true, isWritable: true },
+            { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+          ],
+          data: buyInstructionData,
+        }
+
+        instructions.push(buyInstruction)
+
+        // Create transaction with recent blockhash
+        const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash("finalized")
+
+        const messageV0 = new TransactionMessage({
+          payerKey: keypair.publicKey,
+          recentBlockhash: blockhash,
+          instructions,
+        }).compileToV0Message()
+
+        const transaction = new VersionedTransaction(messageV0)
+        transaction.sign([keypair])
+
+        console.log(`📡 Sending direct Pump.fun transaction...`)
+
+        // Send with higher commitment and retries for fresh tokens
+        const signature = await conn.sendRawTransaction(transaction.serialize(), {
+          skipPreflight: false, // Enable preflight for better error messages
+          preflightCommitment: "processed",
+          maxRetries: 2,
+        })
+
+        console.log(`📡 Transaction sent: ${signature}`)
+
+        // Wait for confirmation with timeout
+        const confirmation = (await Promise.race([
+          conn.confirmTransaction(
+            {
+              signature,
+              blockhash,
+              lastValidBlockHeight,
+            },
+            "processed",
           ),
-        )
-      }
+          new Promise((_, reject) => setTimeout(() => reject(new Error("Transaction confirmation timeout")), 20000)),
+        ])) as any
 
-      // Correct Pump.fun buy instruction
-      const buyInstructionData = Buffer.alloc(24)
-      buyInstructionData.writeUInt32LE(0x66063d12, 0) // Buy method discriminator
-      buyInstructionData.writeBigUInt64LE(BigInt(amountLamports), 8) // SOL amount
-      buyInstructionData.writeBigUInt64LE(BigInt(1), 16) // Min tokens out (very low for fresh tokens)
+        if (confirmation.value?.err) {
+          throw new Error(`Transaction failed: ${JSON.stringify(confirmation.value.err)}`)
+        }
 
-      const buyInstruction = {
-        programId: PUMP_FUN_PROGRAM,
-        keys: [
-          { pubkey: PUMP_FUN_GLOBAL, isSigner: false, isWritable: false },
-          { pubkey: PUMP_FUN_FEE_RECIPIENT, isSigner: false, isWritable: true },
-          { pubkey: tokenMintPubkey, isSigner: false, isWritable: false },
-          { pubkey: bondingCurve, isSigner: false, isWritable: true },
-          { pubkey: associatedBondingCurve, isSigner: false, isWritable: true },
-          { pubkey: userTokenAccount, isSigner: false, isWritable: true },
-          { pubkey: keypair.publicKey, isSigner: true, isWritable: true },
-          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-        ],
-        data: buyInstructionData,
-      }
-
-      instructions.push(buyInstruction)
-
-      // Create transaction with recent blockhash
-      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("finalized")
-
-      const messageV0 = new TransactionMessage({
-        payerKey: keypair.publicKey,
-        recentBlockhash: blockhash,
-        instructions,
-      }).compileToV0Message()
-
-      const transaction = new VersionedTransaction(messageV0)
-      transaction.sign([keypair])
-
-      console.log(`📡 Sending direct Pump.fun transaction...`)
-
-      // Send with higher commitment and retries for fresh tokens
-      const signature = await connection.sendRawTransaction(transaction.serialize(), {
-        skipPreflight: false, // Enable preflight for better error messages
-        preflightCommitment: "processed",
-        maxRetries: 3,
+        return { signature, connection: conn }
       })
-
-      console.log(`📡 Transaction sent: ${signature}`)
-
-      // Wait for confirmation with timeout
-      const confirmation = (await Promise.race([
-        connection.confirmTransaction(
-          {
-            signature,
-            blockhash,
-            lastValidBlockHeight,
-          },
-          "processed",
-        ),
-        new Promise((_, reject) => setTimeout(() => reject(new Error("Transaction confirmation timeout")), 30000)),
-      ])) as any
-
-      if (confirmation.value?.err) {
-        console.error(`❌ Transaction failed:`, confirmation.value.err)
-        return NextResponse.json(
-          {
-            success: false,
-            error: `Transaction failed: ${JSON.stringify(confirmation.value.err)}`,
-            signature,
-          },
-          { status: 500 },
-        )
-      }
 
       console.log(`🎉 DIRECT PUMP.FUN BUY SUCCESS!`)
       return NextResponse.json({
         success: true,
-        signature,
-        solscanUrl: `https://solscan.io/tx/${signature}`,
+        signature: result.signature,
+        solscanUrl: `https://solscan.io/tx/${result.signature}`,
         message: `Successfully bought fresh token for ${amount} SOL via direct Pump.fun contract`,
       })
     } catch (directError: any) {
@@ -329,24 +374,30 @@ export async function POST(request: NextRequest) {
         errorMessage = "Network congestion - try again"
       } else if (errorMessage.includes("InvalidAccountData")) {
         errorMessage = "Token may not be a valid Pump.fun token"
+      } else if (errorMessage.includes("429") || errorMessage.includes("max usage reached")) {
+        errorMessage = "All RPC endpoints are rate limited - please try again in a few minutes"
       }
 
       return NextResponse.json(
         {
           success: false,
           error: `Direct Pump.fun transaction failed: ${errorMessage}`,
-          details: directError.stack,
         },
         { status: 500 },
       )
     }
   } catch (error: any) {
     console.error("❌ API Buy error:", error)
+
+    let errorMessage = error.message || "Unknown error occurred"
+    if (errorMessage.includes("429") || errorMessage.includes("max usage reached")) {
+      errorMessage = "All RPC endpoints are currently rate limited. Please try again in a few minutes."
+    }
+
     return NextResponse.json(
       {
         success: false,
-        error: error.message || "Unknown error occurred",
-        details: error.stack,
+        error: errorMessage,
       },
       { status: 500 },
     )
