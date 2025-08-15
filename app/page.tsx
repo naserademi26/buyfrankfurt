@@ -16,7 +16,7 @@ const ENDPOINT =
   process.env.NEXT_PUBLIC_RPC_URL ||
   process.env.NEXT_PUBLIC_HELIUS_RPC_URL ||
   process.env.NEXT_PUBLIC_SOLANA_RPC ||
-  "https://mainnet.helius-rpc.com/?api-key=785c7d18-85fe-4925-b949-50e533aec16e"
+  "https://lb.drpc.org/solana/AoLSJPx3VEsDmDDks2UasTR-g70MeVMR8Is_IgaNGuYu"
 
 function sanitizeMintInput(input: string): string {
   const s = input.trim()
@@ -34,9 +34,20 @@ function sanitizeMintInput(input: string): string {
   return s.replace(/[^1-9A-HJ-NP-Za-km-z]/g, "")
 }
 
+function getRpcProviderName(endpoint: string): string {
+  if (endpoint.includes("drpc.org")) return "dRPC"
+  if (endpoint.includes("helius")) return "Helius"
+  if (endpoint.includes("alchemy")) return "Alchemy"
+  if (endpoint.includes("chainstack")) return "Chainstack"
+  if (endpoint.includes("ankr")) return "Ankr"
+  if (endpoint.includes("mainnet-beta.solana.com")) return "Solana"
+  return "Custom"
+}
+
 export default function Home() {
   const connection = useMemo(() => new Connection(ENDPOINT, { commitment: "confirmed" }), [])
   const [rpcOk, setRpcOk] = useState<boolean | null>(null)
+  const [rpcLatency, setRpcLatency] = useState<number | null>(null)
 
   const [vaultKeys, setVaultKeys] = useState<string>("")
   const [connected, setConnected] = useState<VaultEntry[]>([])
@@ -67,10 +78,18 @@ export default function Home() {
     let mounted = true
     ;(async () => {
       try {
+        const startTime = Date.now()
         await connection.getLatestBlockhash("confirmed")
-        if (mounted) setRpcOk(true)
+        const latency = Date.now() - startTime
+        if (mounted) {
+          setRpcOk(true)
+          setRpcLatency(latency)
+        }
       } catch {
-        if (mounted) setRpcOk(false)
+        if (mounted) {
+          setRpcOk(false)
+          setRpcLatency(null)
+        }
       }
     })()
     return () => {
@@ -374,7 +393,11 @@ export default function Home() {
         <div className="rounded-xl border border-slate-800 bg-slate-900/60 px-3 py-2 text-sm">
           <span className="text-slate-400">RPC: </span>
           <span className={rpcOk ? "text-emerald-400" : rpcOk === false ? "text-rose-400" : "text-slate-400"}>
-            {rpcOk == null ? "Checking..." : rpcOk ? "Connected" : "Disconnected"}
+            {rpcOk == null
+              ? "Checking..."
+              : rpcOk
+                ? `Connected ${getRpcProviderName(ENDPOINT)}${rpcLatency ? ` (${rpcLatency}ms)` : ""}`
+                : "Disconnected"}
           </span>
         </div>
       </header>
