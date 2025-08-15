@@ -12,11 +12,14 @@ interface TokenInfo {
   source?: "jup" | "pump" | "unknown"
 }
 
-const ENDPOINT =
-  process.env.NEXT_PUBLIC_RPC_URL ||
-  process.env.NEXT_PUBLIC_HELIUS_RPC_URL ||
-  process.env.NEXT_PUBLIC_SOLANA_RPC ||
-  "https://mainnet.helius-rpc.com/?api-key=785c7d18-85fe-4925-b949-50e533aec16e"
+const RPC_ENDPOINTS = [
+  "https://solana-mainnet.core.chainstack.com/1dddd2834b79c0f3f43138bd4a45e3eb", // Chainstack - most reliable
+  "https://mainnet.helius-rpc.com/?api-key=785c7d18-85fe-4925-b949-50e533aec16e", // Helius backup
+  "https://api.mainnet-beta.solana.com", // Public fallback
+  "https://rpc.ankr.com/solana", // Ankr fallback
+]
+
+const ENDPOINT = process.env.NEXT_PUBLIC_RPC_URL || RPC_ENDPOINTS[0]
 
 function sanitizeMintInput(input: string): string {
   const s = input.trim()
@@ -35,8 +38,23 @@ function sanitizeMintInput(input: string): string {
 }
 
 export default function Home() {
-  const connection = useMemo(() => new Connection(ENDPOINT, { commitment: "confirmed" }), [])
+  const [currentRpcIndex, setCurrentRpcIndex] = useState(0)
+  const connection = useMemo(
+    () =>
+      new Connection(RPC_ENDPOINTS[currentRpcIndex], {
+        commitment: "processed", // Faster confirmation
+        confirmTransactionInitialTimeout: 6000, // Reduced timeout for speed
+        disableRetryOnRateLimit: false,
+        httpHeaders: {
+          "Content-Type": "application/json",
+          "User-Agent": "SolanaSniper/5.0",
+        },
+      }),
+    [currentRpcIndex],
+  )
+
   const [rpcOk, setRpcOk] = useState<boolean | null>(null)
+  const [rpcLatency, setRpcLatency] = useState<number | null>(null)
 
   const [vaultKeys, setVaultKeys] = useState<string>("")
   const [connected, setConnected] = useState<VaultEntry[]>([])
@@ -65,18 +83,40 @@ export default function Home() {
 
   useEffect(() => {
     let mounted = true
-    ;(async () => {
+    const testRpcConnection = async () => {
+      const startTime = Date.now()
       try {
-        await connection.getLatestBlockhash("confirmed")
-        if (mounted) setRpcOk(true)
-      } catch {
-        if (mounted) setRpcOk(false)
+        await connection.getLatestBlockhash("processed")
+        const latency = Date.now() - startTime
+        if (mounted) {
+          setRpcOk(true)
+          setRpcLatency(latency)
+          console.log(`✅ RPC Connected (${latency}ms) - ${RPC_ENDPOINTS[currentRpcIndex]}`)
+        }
+      } catch (error) {
+        console.error(`❌ RPC Failed - ${RPC_ENDPOINTS[currentRpcIndex]}:`, error)
+        if (mounted) {
+          setRpcOk(false)
+          setRpcLatency(null)
+          // Try next RPC endpoint
+          if (currentRpcIndex < RPC_ENDPOINTS.length - 1) {
+            console.log(`🔄 Switching to backup RPC...`)
+            setCurrentRpcIndex((prev) => prev + 1)
+          }
+        }
       }
-    })()
+    }
+
+    testRpcConnection()
+
+    // Test connection every 30 seconds
+    const interval = setInterval(testRpcConnection, 30000)
+
     return () => {
       mounted = false
+      clearInterval(interval)
     }
-  }, [connection])
+  }, [connection, currentRpcIndex])
 
   async function addVault() {
     const lines = vaultKeys
@@ -201,7 +241,7 @@ export default function Home() {
 
       const buyPromises = selectedWallets.map(async (wallet) => {
         const balance = balances[wallet.pubkey] || 0
-        const buyAmount = (balance * buyPerc) / 100 - 0.005 // Reserve minimal SOL for fees
+        const buyAmount = (balance * buyPerc) / 100 - 0.003 // Reduced fee reserve for speed
 
         if (buyAmount <= 0) {
           return { wallet: wallet.pubkey, error: "Insufficient balance", amount: 0 }
@@ -209,7 +249,7 @@ export default function Home() {
 
         try {
           const controller = new AbortController()
-          const timeoutId = setTimeout(() => controller.abort(), 8000) // Ultra-fast 8s timeout
+          const timeoutId = setTimeout(() => controller.abort(), 6000) // Reduced to 6s for ultra-fast execution
 
           const res = await fetch("/api/buy", {
             method: "POST",
@@ -220,8 +260,9 @@ export default function Home() {
               privateKey: wallet.sk,
               tokenMint: mint,
               amount: buyAmount,
-              slippage: Math.max(slippageBps / 100, 50),
-              priorityFee: 0.01, // Higher priority fee for faster execution
+              slippage: Math.max(slippageBps / 100, 50), // Minimum 50% slippage for fresh tokens
+              priorityFee: 0.02, // Increased priority fee for maximum speed
+              commitment: "processed", // Fastest confirmation
             }),
           })
 
@@ -238,7 +279,7 @@ export default function Home() {
         } catch (e: any) {
           return {
             wallet: wallet.pubkey,
-            error: e.name === "AbortError" ? "Timeout (8s)" : e.message,
+            error: e.name === "AbortError" ? "Timeout (6s)" : e.message,
             amount: buyAmount,
           }
         }
@@ -261,6 +302,7 @@ export default function Home() {
         failed: failed.length,
         successRate: `${((successful.length / selectedWallets.length) * 100).toFixed(1)}%`,
         totalAmount: successful.reduce((sum, r) => sum + (r.amount || 0), 0).toFixed(4),
+        rpcEndpoint: RPC_ENDPOINTS[currentRpcIndex].split("?")[0], // Hide API keys in logs
       }
 
       setLog(JSON.stringify(summary, null, 2))
@@ -291,7 +333,7 @@ export default function Home() {
       const sellPromises = selectedWallets.map(async (wallet) => {
         try {
           const controller = new AbortController()
-          const timeoutId = setTimeout(() => controller.abort(), 8000) // Ultra-fast 8s timeout
+          const timeoutId = setTimeout(() => controller.abort(), 6000) // Reduced to 6s
 
           const res = await fetch("/api/sell", {
             method: "POST",
@@ -303,7 +345,8 @@ export default function Home() {
               privateKeys: [wallet.sk],
               percentage: sellPerc,
               slippageBps,
-              priorityFee: 0.01, // Higher priority fee
+              priorityFee: 0.02, // Increased priority fee
+              commitment: "processed", // Fastest confirmation
             }),
           })
 
@@ -319,7 +362,7 @@ export default function Home() {
         } catch (e: any) {
           return {
             wallet: wallet.pubkey,
-            error: e.name === "AbortError" ? "Timeout (8s)" : e.message,
+            error: e.name === "AbortError" ? "Timeout (6s)" : e.message,
           }
         }
       })
@@ -340,6 +383,7 @@ export default function Home() {
         successful: successful.length,
         failed: failed.length,
         successRate: `${((successful.length / selectedWallets.length) * 100).toFixed(1)}%`,
+        rpcEndpoint: RPC_ENDPOINTS[currentRpcIndex].split("?")[0],
       }
 
       setLog(JSON.stringify(summary, null, 2))
@@ -376,6 +420,10 @@ export default function Home() {
           <span className={rpcOk ? "text-emerald-400" : rpcOk === false ? "text-rose-400" : "text-slate-400"}>
             {rpcOk == null ? "Checking..." : rpcOk ? "Connected" : "Disconnected"}
           </span>
+          {rpcLatency && <span className="text-slate-400 ml-2">({rpcLatency}ms)</span>}
+          {!rpcOk && currentRpcIndex > 0 && (
+            <span className="text-yellow-400 ml-2">(Backup #{currentRpcIndex + 1})</span>
+          )}
         </div>
       </header>
 
