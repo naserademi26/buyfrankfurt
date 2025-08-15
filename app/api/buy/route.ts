@@ -7,19 +7,11 @@ import { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction } fr
 const JUPITER_API_BASE = "https://quote-api.jup.ag/v6"
 const JUPITER_API_KEY = "2f280df-aa16-4c78-979c-6468f660dbfb"
 
-// Premium RPC endpoints
 const RPC_ENDPOINTS = [
-  "https://lb.drpc.org/solana/AoLSJPx3VEsDmDDks2UasTR-g70MeVMR8Is_IgaNGuYu",
   "https://solana-mainnet.core.chainstack.com/1dddd2834b79c0f3f43138bd4a45e3eb",
   "https://api.mainnet-beta.solana.com",
+  "https://api.devnet.solana.com",
 ]
-
-const DRPC_API_TOKEN = "cc41c7e9dbbb70e05b92558fe0699ec61f30bd40198747e770d321ed9f5f61c7"
-
-// Pump.fun program constants
-const PUMP_FUN_PROGRAM = new PublicKey("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P")
-const PUMP_FUN_GLOBAL = new PublicKey("4wTV1YmiEkRvAtNtsSGPtUrqRYQMe5SKy2uB4Jjaxnjf")
-const PUMP_FUN_FEE_RECIPIENT = new PublicKey("CebN5WGQ4jvEPvsVU4EoHEpgzq1VV7AbicfhtW4xC9iM")
 
 interface BuyRequest {
   privateKey: string
@@ -82,10 +74,6 @@ export async function POST(request: NextRequest) {
     const connection = new Connection(RPC_ENDPOINTS[0], {
       commitment: "processed",
       confirmTransactionInitialTimeout: 6000, // Reduced from 30000 to 6000ms
-      httpHeaders: {
-        Authorization: `Bearer ${DRPC_API_TOKEN}`,
-        "Content-Type": "application/json",
-      },
     })
 
     // Check wallet balance
@@ -370,3 +358,8 @@ export async function POST(request: NextRequest) {
     )
   }
 }
+
+// Pump.fun program constants
+const PUMP_FUN_PROGRAM = new PublicKey("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P")
+const PUMP_FUN_GLOBAL = new PublicKey("4wTV1YmiEkRvAtNtsSGPtUrqRYQMe5SKy2uB4Jjaxnjf")
+const PUMP_FUN_FEE_RECIPIENT = new PublicKey("CebN5WGQ4jvEPvsVU4EoHEpgzq1VV7AbicfhtW4xC9iM")

@@ -5,9 +5,7 @@ import bs58 from "bs58"
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
-const DRPC_RPC_URL = "https://lb.drpc.org/solana/AoLSJPx3VEsDmDDks2UasTR-g70MeVMR8Is_IgaNGuYu"
-const DRPC_API_TOKEN = "cc41c7e9dbbb70e05b92558fe0699ec61f30bd40198747e770d321ed9f5f61c7"
-
+const CHAINSTACK_RPC_URL = "https://solana-mainnet.core.chainstack.com/1dddd2834b79c0f3f43138bd4a45e3eb"
 const BXR_RAW_KEY =
   process.env.BLOXROUTE_API_KEY ||
   process.env.NEXT_PUBLIC_BLOXROUTE_API_KEY ||
@@ -455,12 +453,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, error: "Invalid percentage" }, { status: 400 })
     }
 
-    const connection = new Connection(DRPC_RPC_URL, {
+    const connection = new Connection(CHAINSTACK_RPC_URL, {
       commitment: "processed",
-      httpHeaders: {
-        Authorization: `Bearer ${DRPC_API_TOKEN}`,
-        "Content-Type": "application/json",
-      },
     })
 
     const walletLimit = Math.min(privateKeys.length, limitWallets)
