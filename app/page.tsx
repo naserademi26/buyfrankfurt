@@ -13,9 +13,9 @@ interface TokenInfo {
 }
 
 const RPC_ENDPOINTS = [
-  "http://fra-sender.helius-rpc.com/fast",
-  "https://anitra-p4zjjp-fast-mainnet.helius-rpc.com",
   "https://mainnet.helius-rpc.com/?api-key=785c7d18-85fe-4925-b949-50e533aec16e",
+  "https://anitra-p4zjjp-fast-mainnet.helius-rpc.com",
+  "wss://mainnet.helius-rpc.com/?api-key=785c7d18-85fe-4925-b949-50e533aec16e",
 ]
 
 function createConnectionWithAuth(endpoint: string) {
@@ -48,8 +48,14 @@ export default function Home() {
   const [log, setLog] = useState<string>("")
 
   const [transactionResults, setTransactionResults] = useState<{
-    successful: Array<{ wallet: string; signature?: string; amount?: number }>
-    failed: Array<{ wallet: string; error: string; amount?: number }>
+    successful: Array<{
+      wallet: string
+      signature?: string
+      amount?: number
+      completed?: boolean
+      noTokensAvailable?: boolean
+    }>
+    failed: Array<{ wallet: string; error: string; amount?: number; completed?: boolean; noTokensAvailable?: boolean }>
   }>({ successful: [], failed: [] })
 
   const refreshId = useRef(0)
@@ -331,23 +337,31 @@ export default function Home() {
           clearTimeout(timeoutId)
           const result = await res.json()
 
+          const walletResult = result.results?.[0] || result
           return {
             wallet: wallet.pubkey,
-            success: result.success || (result.ok && result.ok.length > 0),
-            signature: result.signature || (result.ok && result.ok[0]),
-            error: result.error || (result.fail && result.fail[0]?.error),
+            success: walletResult.success,
+            signature: walletResult.signature,
+            error: walletResult.error,
+            completed: result.completed,
+            noTokensAvailable: result.noTokensAvailable,
           }
         } catch (e: any) {
           return {
             wallet: wallet.pubkey,
             error: e.name === "AbortError" ? "Timeout (8s)" : e.message,
+            success: false,
+            completed: false,
+            noTokensAvailable: false,
           }
         }
       })
 
       const results = await Promise.allSettled(sellPromises)
       const processedResults = results.map((r) =>
-        r.status === "fulfilled" ? r.value : { wallet: "unknown", error: "Promise failed" },
+        r.status === "fulfilled"
+          ? r.value
+          : { wallet: "unknown", error: "Promise failed", success: false, completed: false, noTokensAvailable: false },
       )
 
       const successful = processedResults.filter((r) => r.success)
@@ -355,12 +369,20 @@ export default function Home() {
 
       setTransactionResults({ successful, failed })
 
+      const allCompleted = processedResults.every((r) => r.completed)
+      const noTokensAvailable = processedResults.every((r) => r.noTokensAvailable)
+
       const summary = {
         mint,
         totalWallets: selectedWallets.length,
         successful: successful.length,
         failed: failed.length,
         successRate: `${((successful.length / selectedWallets.length) * 100).toFixed(1)}%`,
+        status: allCompleted
+          ? "✅ COMPLETED: All tokens sold successfully"
+          : noTokensAvailable
+            ? "❌ ERROR: No tokens available to sell"
+            : "⚠️ PARTIAL: Some transactions failed",
       }
 
       setLog(JSON.stringify(summary, null, 2))

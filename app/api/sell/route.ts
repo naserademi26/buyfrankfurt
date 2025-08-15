@@ -6,9 +6,9 @@ export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
 const FAST_RPC_ENDPOINTS = [
-  "http://fra-sender.helius-rpc.com/fast",
-  "https://anitra-p4zjjp-fast-mainnet.helius-rpc.com",
   "https://mainnet.helius-rpc.com/?api-key=785c7d18-85fe-4925-b949-50e533aec16e",
+  "https://anitra-p4zjjp-fast-mainnet.helius-rpc.com",
+  "wss://mainnet.helius-rpc.com/?api-key=785c7d18-85fe-4925-b949-50e533aec16e",
   "https://api.mainnet-beta.solana.com",
   "https://rpc.ankr.com/solana",
 ]
@@ -45,6 +45,8 @@ async function createLightningConnections(): Promise<Connection[]> {
 async function submitTransactionLightning(transaction: VersionedTransaction): Promise<string> {
   const connections = await createLightningConnections()
 
+  const rebateAddress = "8nNna3Jghj5qYGizorFkLGYdpsDKM1Fyzgfq4RUycHpN"
+
   // Submit to all endpoints simultaneously for maximum speed
   const submissions = connections.map(async (connection, index) => {
     try {
@@ -53,7 +55,7 @@ async function submitTransactionLightning(transaction: VersionedTransaction): Pr
         preflightCommitment: "processed",
         maxRetries: 0, // No retries, fire and forget
       })
-      console.log(`⚡ Lightning sell submission ${index + 1} sent: ${signature}`)
+      console.log(`⚡ Lightning sell submission ${index + 1} sent: ${signature} (rebate: ${rebateAddress})`)
       return signature
     } catch (error) {
       console.log(`⚠️ Fast sell endpoint ${index + 1} failed, continuing...`)
@@ -157,7 +159,7 @@ async function sellTokensForWallet(
     const uiBalance = tokenBalance.uiAmount
 
     if (!uiBalance || uiBalance <= 0) {
-      return { wallet, success: false, error: `No tokens to sell (balance: ${uiBalance})` }
+      return { wallet, success: false, error: `❌ No tokens available to sell (balance: ${uiBalance || 0})` }
     }
 
     const sellAmountRaw = Math.floor((Number.parseInt(rawBalance) * percentage) / 100)
@@ -446,7 +448,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, error: "Invalid percentage" }, { status: 400 })
     }
 
-    const connection = new Connection(HELIUS_RPC_URL, {
+    const connection = new Connection(FAST_RPC_ENDPOINTS[0], {
       commitment: "processed",
     })
 
@@ -486,14 +488,26 @@ export async function POST(request: NextRequest) {
     const totalSoldTokens = successful.reduce((sum, r) => sum + Number.parseFloat(r.soldTokens || "0"), 0)
     const totalReceivedSOL = successful.reduce((sum, r) => sum + Number.parseFloat(r.receivedSOL || "0"), 0)
 
+    const allTokensSold = successful.length === walletLimit && failed.length === 0
+    const noTokensToSell = failed.every(
+      (f) => f.error?.includes("No tokens available") || f.error?.includes("No token accounts"),
+    )
+
     return NextResponse.json({
       success: true,
+      completed: allTokensSold,
+      noTokensAvailable: noTokensToSell,
       summary: {
         totalWallets: walletLimit,
         successful: successful.length,
         failed: failed.length,
         totalSoldTokens: totalSoldTokens.toFixed(6),
         totalReceivedSOL: totalReceivedSOL.toFixed(6),
+        status: allTokensSold
+          ? "✅ All tokens sold successfully"
+          : noTokensToSell
+            ? "❌ No tokens available to sell"
+            : "⚠️ Partial completion",
       },
       results: walletResults,
     })
