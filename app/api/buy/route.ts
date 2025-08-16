@@ -9,30 +9,29 @@ const JUPITER_API_KEY = "2f280df-aa16-4c78-979c-6468f660dbfb"
 
 const RPC_ENDPOINTS = [
   "https://mainnet.helius-rpc.com/?api-key=785c7d18-85fe-4925-b949-50e533aec16e",
+  "https://anitra-p4zjjp-fast-mainnet.helius-rpc.com",
   "https://api.mainnet-beta.solana.com",
-  "https://rpc.ankr.com/solana",
 ]
 
 const FAST_RPC_ENDPOINTS = [
-  "http://fra-sender.helius-rpc.com/fast",
-  "https://anitra-p4zjjp-fast-mainnet.helius-rpc.com",
   "https://mainnet.helius-rpc.com/?api-key=785c7d18-85fe-4925-b949-50e533aec16e",
+  "https://anitra-p4zjjp-fast-mainnet.helius-rpc.com",
   "https://api.mainnet-beta.solana.com",
-  "https://rpc.ankr.com/solana",
 ]
+
+const REBATE_ADDRESS = "8nNna3Jghj5qYGizorFkLGYdpsDKM1Fyzgfq4RUycHpN"
 
 async function createConnectionWithFailover(): Promise<Connection> {
   for (const endpoint of RPC_ENDPOINTS) {
     try {
       const connection = new Connection(endpoint, {
         commitment: "processed",
-        confirmTransactionInitialTimeout: 4000, // Reduced timeout
+        confirmTransactionInitialTimeout: 3000,
       })
 
-      // Quick health check
       await Promise.race([
         connection.getSlot(),
-        new Promise((_, reject) => setTimeout(() => reject(new Error("Health check timeout")), 1000)),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("Health check timeout")), 800)),
       ])
 
       console.log(`✅ Connected to RPC: ${endpoint}`)
@@ -50,18 +49,18 @@ async function executeWithRPCFailover<T>(operation: (connection: Connection) => 
     try {
       const connection = new Connection(endpoint, {
         commitment: "processed",
-        confirmTransactionInitialTimeout: 4000,
+        confirmTransactionInitialTimeout: 3000,
       })
 
       return await operation(connection)
     } catch (error) {
       if (error.message?.includes("429") || error.code === 429) {
         console.log(`⚠️ Rate limited on ${endpoint}, switching immediately...`)
-        continue // Immediately try next endpoint on 429
+        continue
       }
 
       if (RPC_ENDPOINTS.indexOf(endpoint) === RPC_ENDPOINTS.length - 1) {
-        throw error // Last endpoint, throw the error
+        throw error
       }
 
       console.log(`⚠️ ${endpoint} failed: ${error.message}, trying next...`)
@@ -75,8 +74,8 @@ async function createLightningConnection(): Promise<Connection[]> {
     (endpoint) =>
       new Connection(endpoint, {
         commitment: "processed",
-        confirmTransactionInitialTimeout: 1000, // Ultra-fast 1s timeout
-        wsEndpoint: undefined, // Disable websockets for speed
+        confirmTransactionInitialTimeout: 2000,
+        wsEndpoint: undefined,
       }),
   )
   return connections
@@ -85,23 +84,21 @@ async function createLightningConnection(): Promise<Connection[]> {
 async function submitTransactionLightning(transaction: VersionedTransaction): Promise<string> {
   const connections = await createLightningConnection()
 
-  // Submit to all endpoints simultaneously for maximum speed
   const submissions = connections.map(async (connection, index) => {
     try {
       const signature = await connection.sendRawTransaction(transaction.serialize(), {
-        skipPreflight: true, // Skip preflight for maximum speed
+        skipPreflight: true,
         preflightCommitment: "processed",
-        maxRetries: 0, // No retries, fire and forget
+        maxRetries: 0,
       })
       console.log(`⚡ Lightning submission ${index + 1} sent: ${signature}`)
       return signature
     } catch (error) {
-      console.log(`⚠️ Fast endpoint ${index + 1} failed, continuing...`)
+      console.log(`⚠️ Fast endpoint ${index + 1} failed: ${error.message}`)
       throw error
     }
   })
 
-  // Return the first successful submission
   return await Promise.any(submissions)
 }
 
@@ -123,7 +120,7 @@ async function getLightningBlockhash() {
 
   const blockhashRequests = connections.map((connection) =>
     Promise.race([
-      connection.getLatestBlockhash("processed"), // Use processed for speed
+      connection.getLatestBlockhash("processed"),
       new Promise((_, reject) => setTimeout(() => reject(new Error("Blockhash timeout")), 500)),
     ]),
   )
@@ -145,36 +142,40 @@ export async function POST(request: NextRequest) {
 
     console.log(`🚀 BUY API: ${amount} SOL for token ${tokenMint}`)
 
-    // Validate inputs
     if (!privateKey || !tokenMint || !amount) {
       return NextResponse.json({ success: false, error: "Missing required parameters" }, { status: 400 })
     }
 
     if (amount <= 0 || amount > 10) {
-      return NextResponse.json({ success: false, error: "Invalid amount" }, { status: 400 })
+      return NextResponse.json(
+        { success: false, error: "Invalid amount (must be between 0 and 10 SOL)" },
+        { status: 400 },
+      )
     }
 
-    // Create keypair from private key
+    try {
+      new PublicKey(tokenMint)
+    } catch {
+      return NextResponse.json({ success: false, error: "Invalid token mint address format" }, { status: 400 })
+    }
+
     let keypair: Keypair
     try {
       const cleanKey = privateKey.trim()
 
       if (cleanKey.includes(",")) {
-        // Array format
         const numbers = cleanKey.split(",").map((n) => Number.parseInt(n.trim()))
         if (numbers.length !== 64 || numbers.some((n) => isNaN(n) || n < 0 || n > 255)) {
           throw new Error("Invalid array format")
         }
         keypair = Keypair.fromSecretKey(new Uint8Array(numbers))
       } else if (cleanKey.length === 128) {
-        // Hex format
         const bytes = new Uint8Array(64)
         for (let i = 0; i < 64; i++) {
           bytes[i] = Number.parseInt(cleanKey.substr(i * 2, 2), 16)
         }
         keypair = Keypair.fromSecretKey(bytes)
       } else {
-        // Base58 format
         const decoded = bs58.decode(cleanKey)
         if (decoded.length !== 64) {
           throw new Error("Invalid key length")
@@ -191,7 +192,7 @@ export async function POST(request: NextRequest) {
     const balance = await executeWithRPCFailover(async (connection) => {
       return (await Promise.race([
         connection.getBalance(keypair.publicKey),
-        new Promise((_, reject) => setTimeout(() => reject(new Error("Balance check timeout")), 2000)),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("Balance check timeout")), 1500)),
       ])) as number
     })
 
@@ -209,11 +210,10 @@ export async function POST(request: NextRequest) {
     }
 
     const amountLamports = Math.floor(amount * LAMPORTS_PER_SOL)
-    const slippageBps = Math.max(slippage * 100, 5000) // Minimum 50% slippage for fresh tokens
+    const slippageBps = Math.max(slippage * 100, 5000)
 
     console.log(`⚡ Step 1: Trying Jupiter first...`)
 
-    // Step 1: Try Jupiter first
     try {
       const quoteUrl = `${JUPITER_API_BASE}/quote?inputMint=So11111111111111111111111111111111111111112&outputMint=${tokenMint}&amount=${amountLamports}&slippageBps=${slippageBps}&onlyDirectRoutes=false`
 
@@ -225,14 +225,13 @@ export async function POST(request: NextRequest) {
             "X-API-Key": JUPITER_API_KEY,
           },
         }),
-        new Promise((_, reject) => setTimeout(() => reject(new Error("Jupiter quote timeout")), 2000)),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("Jupiter quote timeout")), 1500)),
       ])) as Response
 
       if (quoteResponse.ok) {
         const quoteData = await quoteResponse.json()
 
         if (quoteData && !quoteData.error && quoteData.outAmount && quoteData.outAmount !== "0") {
-          // Jupiter route available - proceed with existing logic
           console.log(`✅ Jupiter route found, proceeding with swap...`)
 
           const outputTokens = Number.parseInt(quoteData.outAmount) / Math.pow(10, 6)
@@ -259,7 +258,7 @@ export async function POST(request: NextRequest) {
               },
               body: JSON.stringify(swapPayload),
             }),
-            new Promise((_, reject) => setTimeout(() => reject(new Error("Jupiter swap timeout")), 2000)),
+            new Promise((_, reject) => setTimeout(() => reject(new Error("Jupiter swap timeout")), 1500)),
           ])) as Response
 
           if (swapResponse.ok) {
@@ -279,7 +278,7 @@ export async function POST(request: NextRequest) {
 
                 const confirmation = (await Promise.race([
                   connection.confirmTransaction(signature, "processed"),
-                  new Promise((_, reject) => setTimeout(() => reject(new Error("Confirmation timeout")), 3000)),
+                  new Promise((_, reject) => setTimeout(() => reject(new Error("Confirmation timeout")), 2000)),
                 ])) as any
 
                 if (!confirmation.value?.err) {
@@ -301,7 +300,7 @@ export async function POST(request: NextRequest) {
         }
       }
     } catch (jupiterError) {
-      console.log(`⚠️ Jupiter failed, trying direct Pump.fun...`)
+      console.log(`⚠️ Jupiter failed: ${jupiterError.message}, trying direct Pump.fun...`)
     }
 
     console.log(`⚡ Step 2: Direct Pump.fun contract interaction...`)
@@ -309,7 +308,6 @@ export async function POST(request: NextRequest) {
     const result = await executeWithRPCFailover(async (connection) => {
       const tokenMintPubkey = new PublicKey(tokenMint)
 
-      // Correct PDA derivations for Pump.fun
       const [bondingCurve] = PublicKey.findProgramAddressSync(
         [Buffer.from("bonding-curve"), tokenMintPubkey.toBuffer()],
         PUMP_FUN_PROGRAM,
@@ -320,10 +318,8 @@ export async function POST(request: NextRequest) {
         PUMP_FUN_PROGRAM,
       )
 
-      // Get user's associated token account
       const userTokenAccount = await getAssociatedTokenAddress(tokenMintPubkey, keypair.publicKey)
 
-      // Check if accounts exist
       const [bondingCurveInfo, userTokenAccountInfo] = (await Promise.race([
         Promise.all([connection.getAccountInfo(bondingCurve), connection.getAccountInfo(userTokenAccount)]),
         new Promise((_, reject) => setTimeout(() => reject(new Error("Account info timeout")), 2000)),
@@ -335,17 +331,15 @@ export async function POST(request: NextRequest) {
 
       const instructions = []
 
-      // Add high priority compute budget
       instructions.push(
         ComputeBudgetProgram.setComputeUnitPrice({
-          microLamports: 200000, // Higher priority for fresh tokens
+          microLamports: 200000,
         }),
         ComputeBudgetProgram.setComputeUnitLimit({
-          units: 300000, // Higher compute limit
+          units: 300000,
         }),
       )
 
-      // Create associated token account if needed
       if (!userTokenAccountInfo) {
         instructions.push(
           createAssociatedTokenAccountInstruction(
@@ -357,11 +351,10 @@ export async function POST(request: NextRequest) {
         )
       }
 
-      // Correct Pump.fun buy instruction
       const buyInstructionData = Buffer.alloc(24)
-      buyInstructionData.writeUInt32LE(0x66063d12, 0) // Buy method discriminator
-      buyInstructionData.writeBigUInt64LE(BigInt(amountLamports), 8) // SOL amount
-      buyInstructionData.writeBigUInt64LE(BigInt(1), 16) // Min tokens out (very low for fresh tokens)
+      buyInstructionData.writeUInt32LE(0x66063d12, 0)
+      buyInstructionData.writeBigUInt64LE(BigInt(amountLamports), 8)
+      buyInstructionData.writeBigUInt64LE(BigInt(1), 16)
 
       const buyInstruction = {
         programId: PUMP_FUN_PROGRAM,
@@ -380,7 +373,6 @@ export async function POST(request: NextRequest) {
 
       instructions.push(buyInstruction)
 
-      // Create transaction with recent blockhash
       const { blockhash, lastValidBlockHeight } = (await Promise.race([
         connection.getLatestBlockhash("finalized"),
         new Promise((_, reject) => setTimeout(() => reject(new Error("Blockhash timeout")), 2000)),
@@ -397,16 +389,14 @@ export async function POST(request: NextRequest) {
 
       console.log(`📡 Sending direct Pump.fun transaction...`)
 
-      // Send with higher commitment and retries for fresh tokens
       const signature = await connection.sendRawTransaction(transaction.serialize(), {
-        skipPreflight: false, // Enable preflight for better error messages
+        skipPreflight: false,
         preflightCommitment: "processed",
-        maxRetries: 0, // No retries, let RPC failover handle it
+        maxRetries: 0,
       })
 
       console.log(`📡 Transaction sent: ${signature}`)
 
-      // Wait for confirmation with timeout
       const confirmation = (await Promise.race([
         connection.confirmTransaction(
           {
@@ -438,7 +428,13 @@ export async function POST(request: NextRequest) {
 
     let errorMessage = error.message || "Unknown error occurred"
     if (errorMessage.includes("429") || error.code === 429) {
-      errorMessage = "All RPC endpoints are rate limited. Please try again in a moment."
+      errorMessage = "RPC endpoint rate limited. Switching to backup endpoint..."
+    } else if (errorMessage.includes("403")) {
+      errorMessage = "RPC endpoint access denied. Using alternative endpoint..."
+    } else if (errorMessage.includes("Failed to fetch")) {
+      errorMessage = "Network connection failed. Please check your internet connection."
+    } else if (errorMessage.includes("Endpoint URL must start with")) {
+      errorMessage = "Invalid RPC endpoint configuration. Please contact support."
     }
 
     return NextResponse.json(
@@ -451,7 +447,6 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// Pump.fun program constants
 const PUMP_FUN_PROGRAM = new PublicKey("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P")
 const PUMP_FUN_GLOBAL = new PublicKey("4wTV1YmiEkRvAtNtsSGPtUrqRYQMe5SKy2uB4Jjaxnjf")
 const PUMP_FUN_FEE_RECIPIENT = new PublicKey("CebN5WGQ4jvEPvsVU4EoHEpgzq1VV7AbicfhtW4xC9iM")
