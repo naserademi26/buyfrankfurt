@@ -6,8 +6,11 @@ export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
 // RPC and services
-const DRPC_RPC_URL = "https://lb.drpc.org/solana/AoLSJPx3VEsDmDDks2UasTR-g70MeVMR8Is_IgaNGuYu"
-const DRPC_API_TOKEN = "cc41c7e9dbbb70e05b92558fe0699ec61f30bd40198747e770d321ed9f5f61c7"
+const HELIUS_RPC_URL =
+  process.env.HELIUS_RPC_URL ||
+  process.env.NEXT_PUBLIC_RPC_URL ||
+  process.env.NEXT_PUBLIC_HELIUS_RPC_URL ||
+  "https://mainnet.helius-rpc.com/?api-key=785c7d18-85fe-4925-b949-50e533aec16e"
 
 const BXR_RAW_KEY =
   process.env.BLOXROUTE_API_KEY ||
@@ -207,13 +210,7 @@ export async function POST(req: NextRequest) {
     const keys = privateKeys.slice(0, Math.min(limitWallets, 65)).map(decodeKey).filter(Boolean) as Keypair[]
     if (keys.length === 0) return NextResponse.json({ error: "no valid keys" }, { status: 400 })
 
-    const connection = new Connection(DRPC_RPC_URL, {
-      commitment: "confirmed",
-      httpHeaders: {
-        Authorization: `Bearer ${DRPC_API_TOKEN}`,
-        "Content-Type": "application/json",
-      },
-    })
+    const connection = new Connection(HELIUS_RPC_URL, { commitment: "confirmed" })
 
     try {
       await withTimeout(connection.getLatestBlockhash("processed"), 5000, "connection-test")
@@ -434,7 +431,7 @@ export async function POST(req: NextRequest) {
       ok,
       fail,
       hints: {
-        rpc: Boolean(DRPC_RPC_URL),
+        rpc: Boolean(HELIUS_RPC_URL),
         bxrAuth: Boolean(BXR_AUTH),
         jupKey: Boolean(JUP_API_KEY),
         bxrRawKey: Boolean(BXR_RAW_KEY),

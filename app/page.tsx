@@ -12,22 +12,31 @@ interface TokenInfo {
   source?: "jup" | "pump" | "unknown"
 }
 
-const RPC_ENDPOINTS = [
-  "https://mainnet.helius-rpc.com/?api-key=785c7d18-85fe-4925-b949-50e533aec16e",
-  "https://anitra-p4zjjp-fast-mainnet.helius-rpc.com",
-  "wss://mainnet.helius-rpc.com/?api-key=785c7d18-85fe-4925-b949-50e533aec16e",
-]
+const ENDPOINT =
+  process.env.NEXT_PUBLIC_RPC_URL ||
+  process.env.NEXT_PUBLIC_HELIUS_RPC_URL ||
+  process.env.NEXT_PUBLIC_SOLANA_RPC ||
+  "https://mainnet.helius-rpc.com/?api-key=785c7d18-85fe-4925-b949-50e533aec16e"
 
-function createConnectionWithAuth(endpoint: string) {
-  const config: any = { commitment: "confirmed" }
-  return new Connection(endpoint, config)
+function sanitizeMintInput(input: string): string {
+  const s = input.trim()
+  if (!s) return ""
+  try {
+    if (s.startsWith("http")) {
+      const url = new URL(s)
+      const mintParam = url.searchParams.get("mint")
+      if (mintParam) return sanitizeMintInput(mintParam)
+      const parts = url.pathname.split("/").filter(Boolean)
+      const coinIdx = parts.findIndex((p) => p.toLowerCase() === "coin" || p.toLowerCase() === "coins")
+      if (coinIdx >= 0 && parts[coinIdx + 1]) return sanitizeMintInput(parts[coinIdx + 1])
+    }
+  } catch {}
+  return s.replace(/[^1-9A-HJ-NP-Za-km-z]/g, "")
 }
 
 export default function Home() {
-  const [currentRpcIndex, setCurrentRpcIndex] = useState(0)
-  const [connection, setConnection] = useState(() => createConnectionWithAuth(RPC_ENDPOINTS[0]))
+  const connection = useMemo(() => new Connection(ENDPOINT, { commitment: "confirmed" }), [])
   const [rpcOk, setRpcOk] = useState<boolean | null>(null)
-  const [rpcLatency, setRpcLatency] = useState<number | null>(null)
 
   const [vaultKeys, setVaultKeys] = useState<string>("")
   const [connected, setConnected] = useState<VaultEntry[]>([])
@@ -48,62 +57,26 @@ export default function Home() {
   const [log, setLog] = useState<string>("")
 
   const [transactionResults, setTransactionResults] = useState<{
-    successful: Array<{
-      wallet: string
-      signature?: string
-      amount?: number
-      completed?: boolean
-      noTokensAvailable?: boolean
-    }>
-    failed: Array<{ wallet: string; error: string; amount?: number; completed?: boolean; noTokensAvailable?: boolean }>
+    successful: Array<{ wallet: string; signature?: string; amount?: number }>
+    failed: Array<{ wallet: string; error: string; amount?: number }>
   }>({ successful: [], failed: [] })
 
   const refreshId = useRef(0)
 
   useEffect(() => {
     let mounted = true
-
-    const checkRpcHealth = async () => {
+    ;(async () => {
       try {
-        const startTime = Date.now()
-        const controller = new AbortController()
-        const timeoutId = setTimeout(() => controller.abort(), 3000)
-
         await connection.getLatestBlockhash("confirmed")
-        clearTimeout(timeoutId)
-
-        const latency = Date.now() - startTime
-
-        if (mounted) {
-          setRpcOk(true)
-          setRpcLatency(latency)
-        }
-      } catch (error: any) {
-        console.error(`[v0] RPC health check failed for ${RPC_ENDPOINTS[currentRpcIndex]}:`, error)
-
-        if (mounted) {
-          const nextIndex = (currentRpcIndex + 1) % RPC_ENDPOINTS.length
-          console.log(`[v0] Switching to RPC endpoint ${nextIndex}: ${RPC_ENDPOINTS[nextIndex]}`)
-
-          setCurrentRpcIndex(nextIndex)
-          setConnection(createConnectionWithAuth(RPC_ENDPOINTS[nextIndex]))
-
-          setTimeout(() => {
-            if (mounted) checkRpcHealth()
-          }, 100)
-        }
+        if (mounted) setRpcOk(true)
+      } catch {
+        if (mounted) setRpcOk(false)
       }
-    }
-
-    checkRpcHealth()
-
-    const interval = setInterval(checkRpcHealth, 10000)
-
+    })()
     return () => {
       mounted = false
-      clearInterval(interval)
     }
-  }, [connection, currentRpcIndex])
+  }, [connection])
 
   async function addVault() {
     const lines = vaultKeys
@@ -337,31 +310,23 @@ export default function Home() {
           clearTimeout(timeoutId)
           const result = await res.json()
 
-          const walletResult = result.results?.[0] || result
           return {
             wallet: wallet.pubkey,
-            success: walletResult.success,
-            signature: walletResult.signature,
-            error: walletResult.error,
-            completed: result.completed,
-            noTokensAvailable: result.noTokensAvailable,
+            success: result.success || (result.ok && result.ok.length > 0),
+            signature: result.signature || (result.ok && result.ok[0]),
+            error: result.error || (result.fail && result.fail[0]?.error),
           }
         } catch (e: any) {
           return {
             wallet: wallet.pubkey,
             error: e.name === "AbortError" ? "Timeout (8s)" : e.message,
-            success: false,
-            completed: false,
-            noTokensAvailable: false,
           }
         }
       })
 
       const results = await Promise.allSettled(sellPromises)
       const processedResults = results.map((r) =>
-        r.status === "fulfilled"
-          ? r.value
-          : { wallet: "unknown", error: "Promise failed", success: false, completed: false, noTokensAvailable: false },
+        r.status === "fulfilled" ? r.value : { wallet: "unknown", error: "Promise failed" },
       )
 
       const successful = processedResults.filter((r) => r.success)
@@ -369,20 +334,12 @@ export default function Home() {
 
       setTransactionResults({ successful, failed })
 
-      const allCompleted = processedResults.every((r) => r.completed)
-      const noTokensAvailable = processedResults.every((r) => r.noTokensAvailable)
-
       const summary = {
         mint,
         totalWallets: selectedWallets.length,
         successful: successful.length,
         failed: failed.length,
         successRate: `${((successful.length / selectedWallets.length) * 100).toFixed(1)}%`,
-        status: allCompleted
-          ? "✅ COMPLETED: All tokens sold successfully"
-          : noTokensAvailable
-            ? "❌ ERROR: No tokens available to sell"
-            : "⚠️ PARTIAL: Some transactions failed",
       }
 
       setLog(JSON.stringify(summary, null, 2))
@@ -417,11 +374,7 @@ export default function Home() {
         <div className="rounded-xl border border-slate-800 bg-slate-900/60 px-3 py-2 text-sm">
           <span className="text-slate-400">RPC: </span>
           <span className={rpcOk ? "text-emerald-400" : rpcOk === false ? "text-rose-400" : "text-slate-400"}>
-            {rpcOk == null
-              ? "Checking..."
-              : rpcOk
-                ? `Connected ${getRpcProviderName(RPC_ENDPOINTS[currentRpcIndex])}${rpcLatency ? ` (${rpcLatency}ms)` : ""}`
-                : "Disconnected"}
+            {rpcOk == null ? "Checking..." : rpcOk ? "Connected" : "Disconnected"}
           </span>
         </div>
       </header>
@@ -722,30 +675,4 @@ export default function Home() {
       </section>
     </div>
   )
-}
-
-function sanitizeMintInput(input: string): string {
-  const s = input.trim()
-  if (!s) return ""
-  try {
-    if (s.startsWith("http")) {
-      const url = new URL(s)
-      const mintParam = url.searchParams.get("mint")
-      if (mintParam) return sanitizeMintInput(mintParam)
-      const parts = url.pathname.split("/").filter(Boolean)
-      const coinIdx = parts.findIndex((p) => p.toLowerCase() === "coin" || p.toLowerCase() === "coins")
-      if (coinIdx >= 0 && parts[coinIdx + 1]) return sanitizeMintInput(parts[coinIdx + 1])
-    }
-  } catch {}
-  return s.replace(/[^1-9A-HJ-NP-Za-km-z]/g, "")
-}
-
-function getRpcProviderName(endpoint: string): string {
-  if (endpoint.includes("fra-sender.helius-rpc.com")) return "Helius Fast"
-  if (endpoint.includes("anitra-p4zjjp-fast-mainnet.helius-rpc.com")) return "Helius Ultra"
-  if (endpoint.includes("helius-rpc.com")) return "Helius"
-  if (endpoint.includes("alchemy.com")) return "Alchemy"
-  if (endpoint.includes("mainnet-beta.solana.com")) return "Solana"
-  if (endpoint.includes("ankr.com")) return "Ankr"
-  return "Custom"
 }

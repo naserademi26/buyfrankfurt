@@ -8,8 +8,7 @@ function heliusRpcUrl() {
     RPC_URL ||
     NEXT_PUBLIC_RPC_URL ||
     NEXT_PUBLIC_HELIUS_RPC_URL ||
-    (HELIUS_API_KEY ? `https://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}` : undefined) ||
-    "https://lb.drpc.org/solana/AoLSJPx3VEsDmDDks2UasTR-g70MeVMR8Is_IgaNGuYu"
+    (HELIUS_API_KEY ? `https://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}` : undefined)
   )
 }
 
