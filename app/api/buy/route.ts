@@ -70,7 +70,21 @@ async function executeWithRPCFailover<T>(operation: (connection: Connection) => 
 }
 
 async function createLightningConnection(): Promise<Connection[]> {
-  const connections = FAST_RPC_ENDPOINTS.map(
+  const validEndpoints = FAST_RPC_ENDPOINTS.filter((endpoint) => {
+    try {
+      const url = new URL(endpoint)
+      return url.protocol === "https:" || url.protocol === "http:"
+    } catch {
+      console.log(`⚠️ Invalid RPC endpoint URL: ${endpoint}`)
+      return false
+    }
+  })
+
+  if (validEndpoints.length === 0) {
+    throw new Error("No valid RPC endpoints available for lightning transactions")
+  }
+
+  const connections = validEndpoints.map(
     (endpoint) =>
       new Connection(endpoint, {
         commitment: "processed",
@@ -82,50 +96,68 @@ async function createLightningConnection(): Promise<Connection[]> {
 }
 
 async function submitTransactionLightning(transaction: VersionedTransaction): Promise<string> {
-  const connections = await createLightningConnection()
+  try {
+    const connections = await createLightningConnection()
 
-  const submissions = connections.map(async (connection, index) => {
-    try {
-      const signature = await connection.sendRawTransaction(transaction.serialize(), {
-        skipPreflight: true,
-        preflightCommitment: "processed",
-        maxRetries: 0,
-      })
-      console.log(`⚡ Lightning submission ${index + 1} sent: ${signature}`)
-      return signature
-    } catch (error) {
-      console.log(`⚠️ Fast endpoint ${index + 1} failed: ${error.message}`)
-      throw error
-    }
-  })
+    const submissions = connections.map(async (connection, index) => {
+      try {
+        const signature = await Promise.race([
+          connection.sendRawTransaction(transaction.serialize(), {
+            skipPreflight: true,
+            preflightCommitment: "processed",
+            maxRetries: 0,
+          }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("Lightning submission timeout")), 1000)),
+        ])
+        console.log(`⚡ Lightning submission ${index + 1} sent: ${signature}`)
+        return signature as string
+      } catch (error) {
+        console.log(`⚠️ Fast endpoint ${index + 1} failed: ${error.message}`)
+        throw error
+      }
+    })
 
-  return await Promise.any(submissions)
+    return await Promise.any(submissions)
+  } catch (error) {
+    console.log(`⚠️ All lightning endpoints failed: ${error.message}`)
+    throw new Error(`Lightning transaction failed: ${error.message}`)
+  }
 }
 
 async function getLightningBalance(publicKey: PublicKey): Promise<number> {
-  const connections = await createLightningConnection()
+  try {
+    const connections = await createLightningConnection()
 
-  const balanceChecks = connections.map((connection) =>
-    Promise.race([
-      connection.getBalance(publicKey),
-      new Promise((_, reject) => setTimeout(() => reject(new Error("Lightning balance timeout")), 500)),
-    ]),
-  )
+    const balanceChecks = connections.map((connection) =>
+      Promise.race([
+        connection.getBalance(publicKey),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("Lightning balance timeout")), 500)),
+      ]),
+    )
 
-  return (await Promise.any(balanceChecks)) as number
+    return (await Promise.any(balanceChecks)) as number
+  } catch (error) {
+    console.log(`⚠️ Lightning balance check failed: ${error.message}`)
+    throw error
+  }
 }
 
 async function getLightningBlockhash() {
-  const connections = await createLightningConnection()
+  try {
+    const connections = await createLightningConnection()
 
-  const blockhashRequests = connections.map((connection) =>
-    Promise.race([
-      connection.getLatestBlockhash("processed"),
-      new Promise((_, reject) => setTimeout(() => reject(new Error("Blockhash timeout")), 500)),
-    ]),
-  )
+    const blockhashRequests = connections.map((connection) =>
+      Promise.race([
+        connection.getLatestBlockhash("processed"),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("Blockhash timeout")), 500)),
+      ]),
+    )
 
-  return await Promise.any(blockhashRequests)
+    return await Promise.any(blockhashRequests)
+  } catch (error) {
+    console.log(`⚠️ Lightning blockhash failed: ${error.message}`)
+    throw error
+  }
 }
 
 interface BuyRequest {
